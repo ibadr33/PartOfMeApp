@@ -16,21 +16,38 @@ jobs:
     - name: Set up Xcode Version
       run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-    - name: Build App Payload
+    - name: Generate Xcode Project
       run: |
-        # بناء التطبيق كـ Release لـ iOS
-        swift build -c release --triple arm64-apple-ios16.0
+        # تحويل حزمة Swift Package إلى مشروع Xcode قياسي لضمان تحميل الـ SDK
+        swift package generate-xcodeproj --output PartOfMeApp.xcodeproj
+
+    - name: Compile and Archive App
+      run: |
+        # البناء باستخدام أداة Xcode الرسمية لمنصة الآيفون
+        xcodebuild archive \
+          -project PartOfMeApp.xcodeproj \
+          -scheme PartOfMeApp \
+          -sdk iphoneos \
+          -configuration Release \
+          -archivePath $HOME/PartOfMe.xcarchive \
+          CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGNING_REQUIRED=NO
+
+    - name: Export Unsigned IPA
+      run: |
+        # تجهيز حزمة الـ IPA القياسية المقبولة في أدوات التثبيت
+        mkdir -p Payload
+        cp -r $HOME/PartOfMe.xcarchive/Products/usr/local/bin/PartOfMeApp Payload/ 2>/dev/null || cp -r $HOME/PartOfMe.xcarchive/Products/Applications/*.app Payload/ 2>/dev/null || cp -r $HOME/PartOfMe.xcarchive/Products/usr/local/bin/* Payload/ 2>/dev/null
         
-        # تجهيز هيكلية مجلد الـ IPA القياسي للآيفون
-        mkdir -p Payload/PartOfMeApp.app
+        # إذا كان الملف تنفيذي مستقلاً، نضعه داخل مجلد تطبيق وهمي ليقبله الـ TrollStore
+        if [ ! -d Payload/PartOfMeApp.app ]; then
+          mkdir -p Payload/PartOfMeApp.app
+          mv Payload/PartOfMeApp Payload/PartOfMeApp.app/PartOfMeApp 2>/dev/null || mv Payload/* Payload/PartOfMeApp.app/PartOfMeApp 2>/dev/null
+        fi
         
-        # نسخ الملف التنفيذي والموارد إلى داخل الحزمة
-        cp .build/arm64-apple-ios16.0/release/PartOfMeApp Payload/PartOfMeApp.app/PartOfMeApp
-        
-        # توليد ملف معلومات التطبيق الأساسي Info.plist صامت
+        # تزويد التطبيق بملف المعلومات الأساسي
         echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>PartOfMeApp</string><key>CFBundleIdentifier</key><string>com.badr.partofme</string><key>CFBundleName</key><string>جزء مني</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>MinimumOSVersion</key><string>16.0</string></dict></plist>' > Payload/PartOfMeApp.app/Info.plist
         
-        # ضغط المجلد بصيغة ipa
         zip -r PartOfMe.ipa Payload
         
     - name: Upload Finished IPA
