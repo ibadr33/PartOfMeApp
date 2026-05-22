@@ -16,16 +16,11 @@ jobs:
     - name: Set up Xcode Version
       run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-    - name: Generate Xcode Project
+    - name: Compile App via Xcode build system
       run: |
-        # تحويل حزمة Swift Package إلى مشروع Xcode قياسي لضمان تحميل الـ SDK
-        swift package generate-xcodeproj --output PartOfMeApp.xcodeproj
-
-    - name: Compile and Archive App
-      run: |
-        # البناء باستخدام أداة Xcode الرسمية لمنصة الآيفون
+        # بناء حزمة الـ Swift Package مباشرة لمنصة الآيفون بدون الحاجة لمشروع xcodeproj
         xcodebuild archive \
-          -project PartOfMeApp.xcodeproj \
+          -packagepath . \
           -scheme PartOfMeApp \
           -sdk iphoneos \
           -configuration Release \
@@ -35,19 +30,29 @@ jobs:
 
     - name: Export Unsigned IPA
       run: |
-        # تجهيز حزمة الـ IPA القياسية المقبولة في أدوات التثبيت
-        mkdir -p Payload
-        cp -r $HOME/PartOfMe.xcarchive/Products/usr/local/bin/PartOfMeApp Payload/ 2>/dev/null || cp -r $HOME/PartOfMe.xcarchive/Products/Applications/*.app Payload/ 2>/dev/null || cp -r $HOME/PartOfMe.xcarchive/Products/usr/local/bin/* Payload/ 2>/dev/null
+        # تجهيز حزمة الـ IPA والمجلدات القياسية لـ TrollStore
+        mkdir -p Payload/PartOfMeApp.app
         
-        # إذا كان الملف تنفيذي مستقلاً، نضعه داخل مجلد تطبيق وهمي ليقبله الـ TrollStore
-        if [ ! -d Payload/PartOfMeApp.app ]; then
-          mkdir -p Payload/PartOfMeApp.app
-          mv Payload/PartOfMeApp Payload/PartOfMeApp.app/PartOfMeApp 2>/dev/null || mv Payload/* Payload/PartOfMeApp.app/PartOfMeApp 2>/dev/null
+        # نسخ الملف التنفيذي والموارد المستخرجة إلى حزمة التطبيق
+        if [ -d $HOME/PartOfMe.xcarchive/Products/Applications ]; then
+          cp -r $HOME/PartOfMe.xcarchive/Products/Applications/*.app/* Payload/PartOfMeApp.app/ 2>/dev/null || true
         fi
         
-        # تزويد التطبيق بملف المعلومات الأساسي
+        if [ -f $HOME/PartOfMe.xcarchive/Products/usr/local/bin/PartOfMeApp ]; then
+          cp $HOME/PartOfMe.xcarchive/Products/usr/local/bin/PartOfMeApp Payload/PartOfMeApp.app/PartOfMeApp 2>/dev/null || true
+        elif [ -f $HOME/PartOfMe.xcarchive/Products/usr/local/bin/* ]; then
+          cp $HOME/PartOfMe.xcarchive/Products/usr/local/bin/* Payload/PartOfMeApp.app/PartOfMeApp 2>/dev/null || true
+        fi
+        
+        # التأكد من وجود الملف التنفيذي في المسار الصحيح داخل الحزمة
+        if [ ! -f Payload/PartOfMeApp.app/PartOfMeApp ] && [ -f Payload/PartOfMeApp.app/* ]; then
+          mv Payload/PartOfMeApp.app/* Payload/PartOfMeApp.app/PartOfMeApp 2>/dev/null || true
+        fi
+
+        # تزويد التطبيق بملف المعلومات الأساسي (Info.plist) للتشغيل بالهاتف
         echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>PartOfMeApp</string><key>CFBundleIdentifier</key><string>com.badr.partofme</string><key>CFBundleName</key><string>جزء مني</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>MinimumOSVersion</key><string>16.0</string></dict></plist>' > Payload/PartOfMeApp.app/Info.plist
         
+        # ضغط المجلد لإنتاج ملف الـ IPA النهائي
         zip -r PartOfMe.ipa Payload
         
     - name: Upload Finished IPA
