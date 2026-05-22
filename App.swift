@@ -7,7 +7,7 @@ struct SupabaseConfig {
     static let anonKey = "sb_publishable_EK4jspttg3mshfe1ZZ0SMg_NwGLPJ3E"
 }
 
-// MARK: - نماذج البيانات المتوافقة مع السيرفر
+// MARK: - نماذج البيانات
 struct Message: Identifiable, Codable {
     var id: UUID? = UUID()
     let sender_phone: String
@@ -23,7 +23,7 @@ struct ChatUser: Identifiable, Codable {
     let name: String
 }
 
-// MARK: - محرك إدارة الاتصال السحابي الحقيقي
+// MARK: - محرك إدارة الاتصال
 class ChatManager: ObservableObject {
     @Published var currentUserPhone: String = "" {
         didSet { UserDefaults.standard.set(currentUserPhone, forKey: "saved_phone") }
@@ -103,6 +103,13 @@ class ChatManager: ObservableObject {
         .resume()
     }
     
+    func startNewChat(phoneNumber: String, name: String) {
+        if !activeChats.contains(where: { $0.phoneNumber == phoneNumber }) {
+            let newUser = ChatUser(phoneNumber: phoneNumber, name: name)
+            activeChats.append(newUser)
+        }
+    }
+    
     func logout() {
         stopFetching()
         currentUserPhone = ""
@@ -134,10 +141,6 @@ struct LoginView: View {
     @EnvironmentObject var chatManager: ChatManager
     @State private var phoneNumber = ""
     @FocusState private var isKeyfocused: Bool
-    
-    var isPhoneValid: Bool {
-        return phoneNumber.count >= 10 && phoneNumber.allSatisfy { $0.isNumber }
-    }
     
     var body: some View {
         ZStack {
@@ -178,9 +181,9 @@ struct LoginView: View {
                         chatManager.startFetchingMessages()
                     }) {
                         Text("ربط ودخول").font(.system(size: 18, weight: .bold)).foregroundColor(.white)
-                            .frame(maxWidth: .infinity).padding(.vertical, 16).background(isPhoneValid ? Color.blue : Color.gray.opacity(0.4)).cornerRadius(15)
+                            .frame(maxWidth: .infinity).padding(.vertical, 16).background(phoneNumber.count >= 10 ? Color.blue : Color.gray.opacity(0.4)).cornerRadius(15)
                     }
-                    .disabled(!isPhoneValid)
+                    .disabled(phoneNumber.count < 10)
                     .padding(.horizontal, 25)
                 }
             }
@@ -193,25 +196,15 @@ struct LoginView: View {
 struct MainChatsView: View {
     @EnvironmentObject var chatManager: ChatManager
     @State private var showAddChat = false
-    @State private var newChatPhone = ""
-    @State private var newChatName = ""
     
     var body: some View {
         NavigationView {
             ZStack {
                 Color.white.ignoresSafeArea()
-                List {
-                    ForEach(chatManager.activeChats) { user in
-                        NavigationLink(destination: ChatRoomView(targetUser: user)) {
-                            HStack(spacing: 15) {
-                                Circle().fill(Color.blue.opacity(0.1)).frame(width: 50, height: 50)
-                                    .overlay(Text(user.name.prefix(1)).bold().foregroundColor(.blue))
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text(user.name).font(.headline).foregroundColor(.black)
-                                    Text(user.phoneNumber).font(.subheadline).foregroundColor(.secondary)
-                                }
-                            }
-                        }
+                
+                List(chatManager.activeChats) { user in
+                    NavigationLink(destination: ChatRoomView(targetUser: user)) {
+                        ChatUserRow(user: user)
                     }
                 }
                 .listStyle(PlainListStyle())
@@ -222,21 +215,48 @@ struct MainChatsView: View {
                 trailing: Button(action: { showAddChat = true }) { Image(systemName: "plus.circle.fill").font(.title2) }
             )
             .sheet(isPresented: $showAddChat) {
-                VStack(spacing: 20) {
-                    Text("إضافة مستخدم للشبكة").font(.title2).bold().foregroundColor(.black)
-                    TextField("الاسم", text: $newChatName).padding().background(Color(.systemGray6)).cornerRadius(12).foregroundColor(.black)
-                    TextField("رقم الجوال", text: $newChatPhone).keyboardType(.phonePad).padding().background(Color(.systemGray6)).cornerRadius(12).foregroundColor(.black)
-                    Button("تأكيد الإضافة") {
-                        if !newChatPhone.isEmpty && !newChatName.isEmpty {
-                            chatManager.startNewChat(phoneNumber: newChatPhone, name: newChatName)
-                            showAddChat = false
-                        }
-                    }
-                    .font(.headline).foregroundColor(.white).frame(maxWidth: .infinity).padding().background(Color.blue).cornerRadius(12)
-                }
-                .padding(30).background(Color.white.ignoresSafeArea())
+                AddChatSheetView(isPresented: $showAddChat)
+                    .environmentObject(chatManager)
             }
         }
+    }
+}
+
+struct ChatUserRow: View {
+    let user: ChatUser
+    
+    var body: some View {
+        HStack(spacing: 15) {
+            Circle().fill(Color.blue.opacity(0.1)).frame(width: 50, height: 50)
+                .overlay(Text(user.name.prefix(1)).bold().foregroundColor(.blue))
+            VStack(alignment: .leading, spacing: 5) {
+                Text(user.name).font(.headline).foregroundColor(.black)
+                Text(user.phoneNumber).font(.subheadline).foregroundColor(.secondary)
+            }
+        }
+    }
+}
+
+struct AddChatSheetView: View {
+    @EnvironmentObject var chatManager: ChatManager
+    @Binding var isPresented: Bool
+    @State private var newChatPhone = ""
+    @State private var newChatName = ""
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("إضافة مستخدم للشبكة").font(.title2).bold().foregroundColor(.black)
+            TextField("الاسم", text: $newChatName).padding().background(Color(red: 0.95, green: 0.95, blue: 0.97)).cornerRadius(12).foregroundColor(.black)
+            TextField("رقم الجوال", text: $newChatPhone).keyboardType(.phonePad).padding().background(Color(red: 0.95, green: 0.95, blue: 0.97)).cornerRadius(12).foregroundColor(.black)
+            Button("تأكيد الإضافة") {
+                if !newChatPhone.isEmpty && !newChatName.isEmpty {
+                    chatManager.startNewChat(phoneNumber: newChatPhone, name: newChatName)
+                    isPresented = false
+                }
+            }
+            .font(.headline).foregroundColor(.white).frame(maxWidth: .infinity).padding().background(Color.blue).cornerRadius(12)
+        }
+        .padding(30).background(Color.white.ignoresSafeArea())
     }
 }
 
@@ -246,24 +266,20 @@ struct ChatRoomView: View {
     @EnvironmentObject var chatManager: ChatManager
     @State private var messageText = ""
     
-    var filteredMessages: [Message] {
-        chatManager.messages.filter { msg in
-            (msg.sender_phone == chatManager.currentUserPhone && msg.receiver_phone == targetUser.phoneNumber) ||
-            (msg.sender_phone == targetUser.phoneNumber && msg.receiver_phone == chatManager.currentUserPhone)
-        }
-    }
-    
     var body: some View {
         VStack {
             ScrollView {
                 VStack(spacing: 12) {
-                    ForEach(filteredMessages, id: \.idString) { msg in
+                    ForEach(chatManager.messages.filter { msg in
+                        (msg.sender_phone == chatManager.currentUserPhone && msg.receiver_phone == targetUser.phoneNumber) ||
+                        (msg.sender_phone == targetUser.phoneNumber && msg.receiver_phone == chatManager.currentUserPhone)
+                    }, id: \.idString) { msg in
                         let isCurrentUser = msg.sender_phone == chatManager.currentUserPhone
                         HStack {
                             if isCurrentUser { Spacer() }
                             Text(msg.text)
                                 .padding(14)
-                                .background(isCurrentUser ? Color.blue : Color(.systemGray5))
+                                .background(isCurrentUser ? Color.blue : Color(red: 0.9, green: 0.9, blue: 0.92))
                                 .foregroundColor(isCurrentUser ? .white : .black)
                                 .cornerRadius(16)
                             if !isCurrentUser { Spacer() }
@@ -276,8 +292,8 @@ struct ChatRoomView: View {
             .background(Color.white)
             
             HStack(spacing: 10) {
-                TextField("اكتب رسالة حقيقية للطرف الآخر...", text: $messageText)
-                    .padding(12).background(Color(.systemGray6)).cornerRadius(25).foregroundColor(.black)
+                TextField("اكتب رسالة حقيقية...", text: $messageText)
+                    .padding(12).background(Color(red: 0.95, green: 0.95, blue: 0.97)).cornerRadius(25).foregroundColor(.black)
                 
                 Button(action: {
                     chatManager.sendMessageToCloud(to: targetUser.phoneNumber, text: messageText)
