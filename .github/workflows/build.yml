@@ -1,0 +1,40 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Xcode Version
+      run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+    - name: Build App Payload
+      run: |
+        # بناء التطبيق كـ Release لـ iOS
+        swift build -c release --triple arm64-apple-ios16.0
+        
+        # تجهيز هيكلية مجلد الـ IPA القياسي للآيفون
+        mkdir -p Payload/PartOfMeApp.app
+        
+        # نسخ الملف التنفيذي والموارد إلى داخل الحزمة
+        cp .build/arm64-apple-ios16.0/release/PartOfMeApp Payload/PartOfMeApp.app/PartOfMeApp
+        
+        # توليد ملف معلومات التطبيق الأساسي Info.plist صامت
+        echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>PartOfMeApp</string><key>CFBundleIdentifier</key><string>com.badr.partofme</string><key>CFBundleName</key><string>جزء مني</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>MinimumOSVersion</key><string>16.0</string></dict></plist>' > Payload/PartOfMeApp.app/Info.plist
+        
+        # ضغط المجلد بصيغة ipa
+        zip -r PartOfMe.ipa Payload
+        
+    - name: Upload Finished IPA
+      uses: actions/upload-artifact@v4
+      with:
+        name: PartOfMe-Unsigned-IPA
+        path: PartOfMe.ipa
