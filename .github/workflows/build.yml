@@ -16,33 +16,31 @@ jobs:
     - name: Set up Xcode Version
       run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-    - name: Compile App via SwiftPM with iPhoneOS SDK
+    - name: Direct iPhone Compilation via swiftc
       run: |
-        # جلب مسار الـ iPhoneOS SDK الرسمي داخل سيرفر الماك
+        # جلب الـ SDK النقي المخصص للـ iOS عزل تام عن نظام الماك
         SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
         
-        # بناء الحزمة التنفيذية مع توجيه المترجم للمكتبات القياسية الخاصة بالآيفون مباشرة
-        swift build \
-          -c release \
-          --triple arm64-apple-ios16.0 \
-          -Xswiftc -sdk -Xswiftc "$SDK_PATH"
+        # أمر تجميع الملف الفردي المباشر لمنصات الـ arm64
+        swiftc App.swift \
+          -sdk "$SDK_PATH" \
+          -target arm64-apple-ios16.0 \
+          -O \
+          -o PartOfMeApp
 
-    - name: Export Unsigned IPA for TrollStore
+    - name: Export Payload Package for TrollStore
       run: |
-        # تجهيز المجلد القياسي للتطبيق
         mkdir -p Payload/PartOfMeApp.app
+        mv PartOfMeApp Payload/PartOfMeApp.app/PartOfMeApp
         
-        # نقل الملف التنفيذي المستخرج من مسار بناء سويفت إلى حزمة التطبيق
-        cp .build/arm64-apple-ios16.0/release/PartOfMeApp Payload/PartOfMeApp.app/PartOfMeApp
+        # توليد ملف الخصائص الرقمي الأساسي للتطبيق
+        echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>PartOfMeApp</string><key>CFBundleIdentifier</key><string>com.badr.partofme</string><key>CFBundleName</key><string>مراسلة الجوال</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>MinimumOSVersion</key><string>16.0</string></dict></plist>' > Payload/PartOfMeApp.app/Info.plist
         
-        # تزويد التطبيق بملف الخصائص والمعلومات الأساسي ليقبله الهاتف
-        echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>PartOfMeApp</string><key>CFBundleIdentifier</key><string>com.badr.partofme</string><key>CFBundleName</key><string>جزء مني</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>MinimumOSVersion</key><string>16.0</string></dict></plist>' > Payload/PartOfMeApp.app/Info.plist
-        
-        # ضغط المجلد وإنتاج ملف الـ IPA النهائي
+        # ضغط الملف لإنتاج حزمة الـ IPA الجاهزة للتثبيت
         zip -r PartOfMe.ipa Payload
         
-    - name: Upload Finished IPA
+    - name: Upload iOS Chat IPA
       uses: actions/upload-artifact@v4
       with:
-        name: PartOfMe-Unsigned-IPA
+        name: PartOfMe-Chat-IPA
         path: PartOfMe.ipa

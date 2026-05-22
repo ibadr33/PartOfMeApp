@@ -23,7 +23,7 @@ class ChatManager: ObservableObject {
     @Published var messages: [Message] = []
     
     init() {
-        // محادثات تجريبية أولية للتأكد من عمل الواجهة فور التثبيت
+        // بيانات تجريبية للتأكد من استقرار الواجهة فور تشغيل التطبيق
         activeChats = [
             ChatUser(phoneNumber: "0500000000", name: "بدر (تجربة)")
         ]
@@ -51,7 +51,7 @@ class ChatManager: ObservableObject {
     }
 }
 
-// MARK: - نقطة انطلاق التطبيق الرسمية لبيئة iOS
+// MARK: - نقطة الانطلاق الرسمية للتطبيق (App Entry)
 @main
 struct ChatApplication: App {
     @StateObject private var chatManager = ChatManager()
@@ -69,7 +69,9 @@ struct ChatApplication: App {
     }
 }
 
-// 1. واجهة تسجيل الدخول برقم الجوال
+// MARK: - الواجهات الرسومية (UI Views)
+
+// 1. واجهة تسجيل الدخول
 struct LoginView: View {
     @EnvironmentObject var chatManager: ChatManager
     @State private var phoneNumber = ""
@@ -93,6 +95,7 @@ struct LoginView: View {
                 .background(Color(.systemGray6))
                 .cornerRadius(12)
                 .multilineTextAlignment(.center)
+                .keyboardType(.phonePad)
             
             Button(action: login) {
                 Text("دخول")
@@ -116,7 +119,7 @@ struct LoginView: View {
     }
 }
 
-// 2. واجهة قائمة المحادثات النشطة
+// 2. قائمة المحادثات
 struct MainChatsView: View {
     @EnvironmentObject var chatManager: ChatManager
     @State private var showAddChat = false
@@ -151,6 +154,7 @@ struct MainChatsView: View {
                     TextField("اسم الشخص", text: $newChatName)
                         .padding().background(Color(.systemGray6)).cornerRadius(10)
                     TextField("رقم الجوال", text: $newChatPhone)
+                        .keyboardType(.phonePad)
                         .padding().background(Color(.systemGray6)).cornerRadius(10)
                     
                     Button("إضافة") {
@@ -170,7 +174,7 @@ struct MainChatsView: View {
     }
 }
 
-// 3. شاشة محادثة غرف الدردشة
+// 3. شاشة غرفة الدردشة
 struct ChatRoomView: View {
     let targetUser: ChatUser
     @EnvironmentObject var chatManager: ChatManager
@@ -183,7 +187,7 @@ struct ChatRoomView: View {
                     ForEach(chatManager.messages.filter {
                         ($0.senderPhone == chatManager.currentUserPhone && $0.receiverPhone == targetUser.phoneNumber) ||
                         ($0.senderPhone == targetUser.phoneNumber && $0.receiverPhone == chatManager.currentUserPhone) ||
-                        (targetUser.phoneNumber == "0500000000" && $0.senderPhone == "0500000000") // عرض الرسالة الترحيبية للتحقق
+                        (targetUser.phoneNumber == "0500000000" && $0.senderPhone == "0500000000")
                     }) { msg in
                         let isCurrentUser = msg.senderPhone == chatManager.currentUserPhone
                         HStack {
@@ -226,51 +230,3 @@ struct ChatRoomView: View {
         messageText = ""
     }
 }
-EOF\cat << 'EOF' > .github/workflows/build.yml
-name: Build iOS IPA
-
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: macos-latest
-
-    steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-
-    - name: Set up Xcode Version
-      run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-
-    - name: Pure Cross-Compile via Swiftc
-      run: |
-        # استخراج مسار حزمة الآيفون الصافية بشكل معزول تماماً عن الماك
-        SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-        
-        # التجميع النهائي والمباشر لملف السورس إلى حزمة تنفيذية للآيفون
-        swiftc Sources/App.swift \
-          -sdk "$SDK_PATH" \
-          -target arm64-apple-ios16.0 \
-          -O \
-          -o PartOfMeApp
-
-    - name: Export Payload structure for TrollStore
-      run: |
-        # إنشاء الهيكل الرسمي للتطبيق ليتعرف عليه الهاتف
-        mkdir -p Payload/PartOfMeApp.app
-        mv PartOfMeApp Payload/PartOfMeApp.app/PartOfMeApp
-        
-        # حقن ملف الخصائص الرقمي الأساسي
-        echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>PartOfMeApp</string><key>CFBundleIdentifier</key><string>com.badr.partofme</string><key>CFBundleName</key><string>مراسلة الجوال</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>MinimumOSVersion</key><string>16.0</string></dict></plist>' > Payload/PartOfMeApp.app/Info.plist
-        
-        # إنتاج الحزمة النهائية المضغوطة بالامتداد المطلوب لـ TrollStore
-        zip -r PartOfMe.ipa Payload
-        
-    - name: Upload Unsigned IPA Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: PartOfMe-Chat-IPA
-        path: PartOfMe.ipa
