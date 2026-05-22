@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - نماذج البيانات (Models)
+// MARK: - نماذج البيانات الأساسية
 struct Message: Identifiable, Codable {
     let id: UUID
     let senderPhone: String
@@ -15,7 +15,7 @@ struct ChatUser: Identifiable, Codable {
     let name: String
 }
 
-// MARK: - محرك إدارة المحادثات المحصن
+// MARK: - محرك إدارة التطبيق
 class ChatManager: ObservableObject {
     @Published var currentUserPhone: String = "" {
         didSet {
@@ -86,79 +86,96 @@ struct ChatApplication: App {
     }
 }
 
-// MARK: - 1. واجهة تسجيل الدخول المطورة
+// MARK: - 1. واجهة تسجيل الدخول المضادة للاختفاء (قسرية الألوان والتمرير)
 struct LoginView: View {
     @EnvironmentObject var chatManager: ChatManager
     @State private var phoneNumber = ""
     @FocusState private var isKeyfocused: Bool
     
-    // تم تغيير التحقق هنا ليكون داخلي ومباشر متوافق مع المترجم السحابي
     var isPhoneValid: Bool {
         return phoneNumber.count >= 10 && phoneNumber.allSatisfy { $0.isNumber }
     }
     
     var body: some View {
         ZStack {
-            Color(.systemBackground).ignoresSafeArea()
+            // إجبار الخلفية على اللون الأبيض الصافي لكسر الوضع الداكن في التطبيق المترجم
+            Color.white.ignoresSafeArea()
             
-            VStack {
-                Spacer()
-                
-                ZStack {
-                    Circle()
-                        .fill(Color.blue.opacity(0.1))
-                        .frame(width: 120, height: 120)
-                    Text("💬")
-                        .font(.system(size: 60))
-                }
-                
-                VStack(spacing: 8) {
-                    Text("مرحباً بك")
-                        .font(.system(size: 34, weight: .bold))
-                    Text("سجل دخولك برقم الجوال المباشر")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.top, 10)
-                
-                Spacer()
-                
-                VStack(alignment: .leading, spacing: 10) {
-                    TextField("05xxxxxxxx", text: $phoneNumber)
-                        .keyboardType(.phonePad)
-                        .focused($isKeyfocused)
-                        .font(.title2)
-                        .multilineTextAlignment(.center)
-                        .padding()
-                        .background(Color(.systemGray6))
-                        .cornerRadius(15)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 15)
-                                .stroke(isPhoneValid ? Color.blue : Color.clear, lineWidth: 1.5)
-                        )
-                }
-                .padding(.horizontal, 30)
-                
-                Button(action: {
-                    isKeyfocused = false
-                    chatManager.currentUserPhone = phoneNumber
-                    chatManager.isLoggedIn = true
-                }) {
-                    Text("دخول سريع")
-                        .font(.headline)
+            // حاوية تمرير مرنة تسمح بسحب الشاشة لأسفل عند ظهور الكيبورد
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 30) {
+                    
+                    Spacer()
+                        .frame(height: 40)
+                    
+                    // شعار التطبيق المحدث والأنيق
+                    ZStack {
+                        Circle()
+                            .fill(Color.blue.opacity(0.1))
+                            .frame(width: 110, height: 110)
+                        Text("💬")
+                            .font(.system(size: 55))
+                    }
+                    
+                    VStack(spacing: 12) {
+                        Text("تطبيق المراسلة الفورية")
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundColor(.black) // خط أسود صريح
+                        
+                        Text("المراسلة الآمنة برقم الجوال المباشر")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(.gray)
+                    }
+                    
+                    // حقل الإدخال الذكي في موقع مرتفع ومحمي
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("أدخل رقم الجوال")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(.blue)
+                            .padding(.horizontal, 5)
+                        
+                        TextField("05xxxxxxxx", text: $phoneNumber)
+                            .keyboardType(.phonePad)
+                            .focused($isKeyfocused)
+                            .font(.system(size: 22, weight: .bold))
+                            .multilineTextAlignment(.center)
+                            .padding(.vertical, 16)
+                            .background(Color(red: 0.95, green: 0.95, blue: 0.97)) // خلفية رمادية فاتحة جداً تفتح النفس
+                            .cornerRadius(15)
+                            .foregroundColor(.black) // تلوين نص الرقم بالأسود الصريح
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 15)
+                                    .stroke(isPhoneValid ? Color.blue : Color.gray.opacity(0.2), lineWidth: 2)
+                            )
+                    }
+                    .padding(.horizontal, 25)
+                    .padding(.top, 10)
+                    
+                    // زر الدخول المحدث
+                    Button(action: {
+                        isKeyfocused = false
+                        chatManager.currentUserPhone = phoneNumber
+                        chatManager.isLoggedIn = true
+                    }) {
+                        HStack {
+                            Text("دخول سريع وآمن")
+                            Image(systemName: "arrow.left.circle.fill")
+                        }
+                        .font(.system(size: 18, weight: .bold))
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(isPhoneValid ? Color.blue : Color.gray.opacity(0.5))
+                        .padding(.vertical, 16)
+                        .background(isPhoneValid ? Color.blue : Color.gray.opacity(0.4))
                         .cornerRadius(15)
+                        .shadow(color: isPhoneValid ? Color.blue.opacity(0.3) : Color.clear, radius: 8, x: 0, y: 4)
+                    }
+                    .disabled(!isPhoneValid)
+                    .padding(.horizontal, 25)
+                    
+                    Spacer()
                 }
-                .disabled(!isPhoneValid)
-                .padding(.horizontal, 30)
-                .padding(.top, 15)
-                
-                Spacer()
+                .padding(.horizontal)
             }
-            .padding()
         }
         .onTapGesture {
             isKeyfocused = false
@@ -175,24 +192,29 @@ struct MainChatsView: View {
     
     var body: some View {
         NavigationView {
-            List {
-                ForEach(chatManager.activeChats) { user in
-                    NavigationLink(destination: ChatRoomView(targetUser: user)) {
-                        HStack(spacing: 15) {
-                            ZStack {
-                                Circle().fill(Color.blue.opacity(0.1))
-                                Text(user.name.prefix(1)).bold().foregroundColor(.blue)
+            ZStack {
+                Color.white.ignoresSafeArea()
+                
+                List {
+                    ForEach(chatManager.activeChats) { user in
+                        NavigationLink(destination: ChatRoomView(targetUser: user)) {
+                            HStack(spacing: 15) {
+                                ZStack {
+                                    Circle().fill(Color.blue.opacity(0.1))
+                                    Text(user.name.prefix(1)).bold().foregroundColor(.blue)
+                                }
+                                .frame(width: 50, height: 50)
+                                
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(user.name).font(.headline).foregroundColor(.black)
+                                    Text(user.phoneNumber).font(.subheadline).foregroundColor(.secondary)
+                                }
                             }
-                            .frame(width: 50, height: 50)
-                            
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(user.name).font(.headline)
-                                Text(user.phoneNumber).font(.subheadline).foregroundColor(.secondary)
-                            }
+                            .padding(.vertical, 4)
                         }
-                        .padding(.vertical, 4)
                     }
                 }
+                .listStyle(PlainListStyle())
             }
             .navigationTitle("المحادثات")
             .navigationBarItems(
@@ -203,14 +225,14 @@ struct MainChatsView: View {
             )
             .sheet(isPresented: $showAddChat) {
                 VStack(spacing: 20) {
-                    Text("بدء محادثة جديدة").font(.title2).bold()
+                    Text("بدء محادثة جديدة").font(.title2).bold().foregroundColor(.black)
                     
                     TextField("اسم الشخص", text: $newChatName)
-                        .padding().background(Color(.systemGray6)).cornerRadius(12)
+                        .padding().background(Color(.systemGray6)).cornerRadius(12).foregroundColor(.black)
                     
                     TextField("رقم الجوال", text: $newChatPhone)
                         .keyboardType(.phonePad)
-                        .padding().background(Color(.systemGray6)).cornerRadius(12)
+                        .padding().background(Color(.systemGray6)).cornerRadius(12).foregroundColor(.black)
                     
                     Button("إضافة القائمة") {
                         if !newChatPhone.isEmpty && !newChatName.isEmpty {
@@ -224,12 +246,13 @@ struct MainChatsView: View {
                     .frame(maxWidth: .infinity).padding().background(Color.blue).cornerRadius(12)
                 }
                 .padding(30)
+                .background(Color.white.ignoresSafeArea())
             }
         }
     }
 }
 
-// MARK: - 3. غرفة الدردشة الكاملة والذكية
+// MARK: - 3. غرفة الدردشة الكاملة
 struct ChatRoomView: View {
     let targetUser: ChatUser
     @EnvironmentObject var chatManager: ChatManager
@@ -246,7 +269,7 @@ struct ChatRoomView: View {
                             Text(msg.text)
                                 .padding(14)
                                 .background(isCurrentUser ? Color.blue : Color(.systemGray5))
-                                .foregroundColor(isCurrentUser ? .white : .primary)
+                                .foregroundColor(isCurrentUser ? .white : .black)
                                 .cornerRadius(16)
                             if !isCurrentUser { Spacer() }
                         }
@@ -255,12 +278,14 @@ struct ChatRoomView: View {
                 }
                 .padding(.top)
             }
+            .background(Color.white)
             
             HStack(spacing: 10) {
                 TextField("اكتب رسالتك هنا...", text: $messageText)
                     .padding(12)
                     .background(Color(.systemGray6))
                     .cornerRadius(25)
+                    .foregroundColor(.black)
                 
                 Button(action: {
                     chatManager.sendMessage(to: targetUser.phoneNumber, text: messageText)
@@ -275,6 +300,7 @@ struct ChatRoomView: View {
                 .disabled(messageText.isEmpty)
             }
             .padding()
+            .background(Color.white)
         }
         .navigationTitle(targetUser.name)
         .navigationBarTitleDisplayMode(.inline)
