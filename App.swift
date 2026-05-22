@@ -15,20 +15,34 @@ struct ChatUser: Identifiable, Codable {
     let name: String
 }
 
-// MARK: - محرك إدارة المحادثات (Chat Engine)
+// MARK: - محرك إدارة المحادثات المحصن (Enhanced Chat Engine)
 class ChatManager: ObservableObject {
-    @Published var currentUserPhone: String = ""
+    @Published var currentUserPhone: String = "" {
+        didSet {
+            // حفظ الرقم تلقائياً لتجنب تسجيل الدخول المتكرر
+            UserDefaults.standard.set(currentUserPhone, forKey: "saved_phone")
+        }
+    }
     @Published var isLoggedIn: Bool = false
     @Published var activeChats: [ChatUser] = []
     @Published var messages: [Message] = []
     
     init() {
-        // بيانات تجريبية للتأكد من استقرار الواجهة فور تشغيل التطبيق
+        // استعادة الجلسة السابقة إن وجدت
+        if let savedPhone = UserDefaults.standard.string(forKey: "saved_phone"), !savedPhone.isEmpty {
+            self.currentUserPhone = savedPhone
+            self.isLoggedIn = true
+        }
+        
+        // بيانات أولية تفتح النفس وتضمن عدم فراغ التطبيق
         activeChats = [
-            ChatUser(phoneNumber: "0500000000", name: "بدر (تجربة)")
+            ChatUser(phoneNumber: "0500000000", name: "الدعم الفني 👋"),
+            ChatUser(phoneNumber: "0511111111", name: "المطور بدر 🚀")
         ]
+        
         messages = [
-            Message(id: UUID(), senderPhone: "0500000000", receiverPhone: "", text: "مرحباً بك في تطبيق المراسلة الجديد! 💬", timestamp: Date())
+            Message(id: UUID(), senderPhone: "0500000000", receiverPhone: "all", text: "مرحباً بك في نظام المراسلة الآمن الجديد! 💬", timestamp: Date()),
+            Message(id: UUID(), senderPhone: "0511111111", receiverPhone: "all", text: "تم ترقية الواجهة وحل مشكلة الكيبورد جذرياً يا بطل. 👍", timestamp: Date())
         ]
     }
     
@@ -49,9 +63,15 @@ class ChatManager: ObservableObject {
             activeChats.append(newUser)
         }
     }
+    
+    func logout() {
+        currentUserPhone = ""
+        isLoggedIn = false
+        UserDefaults.standard.removeObject(forKey: "saved_phone")
+    }
 }
 
-// MARK: - نقطة الانطلاق الرسمية للتطبيق (App Entry)
+// MARK: - التطبيق الأساسي
 @main
 struct ChatApplication: App {
     @StateObject private var chatManager = ChatManager()
@@ -69,57 +89,90 @@ struct ChatApplication: App {
     }
 }
 
-// MARK: - الواجهات الرسومية (UI Views)
-
-// 1. واجهة تسجيل الدخول
+// MARK: - 1. واجهة تسجيل الدخول المطورة (Anti-Keyboard Block)
 struct LoginView: View {
     @EnvironmentObject var chatManager: ChatManager
     @State private var phoneNumber = ""
+    @FocusState private var isKeyfocused: Bool
     
-    var body: some View {
-        VStack(spacing: 25) {
-            Spacer()
-            Text("💬")
-                .font(.system(size: 80))
-            
-            Text("تطبيق المراسلة الفورية")
-                .font(.title)
-                .bold()
-            
-            Text("المراسلة الآمنة برقم الجوال فقط")
-                .font(.subheadline)
-                .foregroundColor(.gray)
-            
-            TextField("أدخل رقم جوالك", text: $phoneNumber)
-                .padding()
-                .background(Color(.systemGray6))
-                .cornerRadius(12)
-                .multilineTextAlignment(.center)
-                .keyboardType(.phonePad)
-            
-            Button(action: login) {
-                Text("دخول")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(phoneNumber.count >= 10 ? Color.blue : Color.gray)
-                    .cornerRadius(12)
-            }
-            .disabled(phoneNumber.count < 10)
-            
-            Spacer()
-        }
-        .padding(30)
+    // التحقق من أن المدخلات أرقام فقط وبطول صحيح
+    var isPhoneValid: Bool {
+        let isNumeric = phoneNumber.allConstraints { $0.isNumber }
+        return phoneNumber.count >= 10 && isNumeric
     }
     
-    func login() {
-        chatManager.currentUserPhone = phoneNumber
-        chatManager.isLoggedIn = true
+    var body: some View {
+        ZStack {
+            Color(.systemBackground).ignoresSafeArea()
+            
+            VStack {
+                Spacer()
+                
+                // أيقونة الواجهة عصرية
+                ZStack {
+                    Circle()
+                        .fill(Color.blue.opacity(0.1))
+                        .frame(width: 120, height: 120)
+                    Text("💬")
+                        .font(.system(size: 60))
+                }
+                
+                VStack(spacing: 8) {
+                    Text("مرحباً بك")
+                        .font(.system(size: 34, weight: .bold))
+                    Text("سجل دخولك برقم الجوال المباشر")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.top, 10)
+                
+                Spacer()
+                
+                // حقل الإدخال في موقع مرن يتكيف تلقائياً مع الكيبورد
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("05xxxxxxxx", text: $phoneNumber)
+                        .keyboardType(.phonePad)
+                        .focused($isKeyfocused)
+                        .font(.title2)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                        .background(Color(.systemGray6))
+                        .cornerRadius(15)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 15)
+                                .stroke(isPhoneValid ? Color.blue : Color.clear, lineWidth: 1.5)
+                        )
+                }
+                .padding(.horizontal, 30)
+                
+                Button(action: {
+                    isKeyfocused = false
+                    chatManager.currentUserPhone = phoneNumber
+                    chatManager.isLoggedIn = true
+                }) {
+                    Text("دخول سريع")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(isPhoneValid ? Color.blue : Color.gray.opacity(0.5))
+                        .cornerRadius(15)
+                }
+                .disabled(!isPhoneValid)
+                .padding(.horizontal, 30)
+                .padding(.top, 15)
+                
+                Spacer()
+            }
+            .padding()
+        }
+        .onTapGesture {
+            isKeyfocused = false
+        }
     }
 }
 
-// 2. قائمة المحادثات
+// MARK: - 2. واجهة قائمة المحادثات الكاملة
 struct MainChatsView: View {
     @EnvironmentObject var chatManager: ChatManager
     @State private var showAddChat = false
@@ -128,36 +181,44 @@ struct MainChatsView: View {
     
     var body: some View {
         NavigationView {
-            List(chatManager.activeChats) { user in
-                NavigationLink(destination: ChatRoomView(targetUser: user)) {
-                    HStack {
-                        Image(systemName: "person.circle.fill")
-                            .font(.largeTitle)
-                            .foregroundColor(.blue)
-                        VStack(alignment: .leading) {
-                            Text(user.name).bold()
-                            Text(user.phoneNumber)
-                                .font(.caption)
-                                .foregroundColor(.gray)
+            List {
+                ForEach(chatManager.activeChats) { user in
+                    NavigationLink(destination: ChatRoomView(targetUser: user)) {
+                        HStack(spacing: 15) {
+                            ZStack {
+                                Circle().fill(Color.blue.opacity(0.1))
+                                Text(user.name.prefix(1)).bold().foregroundColor(.blue)
+                            }
+                            .frame(width: 50, height: 50)
+                            
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(user.name).font(.headline)
+                                Text(user.phoneNumber).font(.subheadline).foregroundColor(.secondary)
+                            }
                         }
+                        .padding(.vertical, 4)
                     }
-                    .padding(.vertical, 4)
                 }
             }
             .navigationTitle("المحادثات")
-            .navigationBarItems(trailing: Button(action: { showAddChat = true }) {
-                Image(systemName: "plus.circle.fill").font(.title2)
-            })
+            .navigationBarItems(
+                leading: Button("خروج") { chatManager.logout() }.foregroundColor(.red),
+                trailing: Button(action: { showAddChat = true }) {
+                    Image(systemName: "plus.circle.fill").font(.title2)
+                }
+            )
             .sheet(isPresented: $showAddChat) {
                 VStack(spacing: 20) {
-                    Text("بدء محادثة جديدة").font(.headline).bold()
+                    Text("بدء محادثة جديدة").font(.title2).bold()
+                    
                     TextField("اسم الشخص", text: $newChatName)
-                        .padding().background(Color(.systemGray6)).cornerRadius(10)
+                        .padding().background(Color(.systemGray6)).cornerRadius(12)
+                    
                     TextField("رقم الجوال", text: $newChatPhone)
                         .keyboardType(.phonePad)
-                        .padding().background(Color(.systemGray6)).cornerRadius(10)
+                        .padding().background(Color(.systemGray6)).cornerRadius(12)
                     
-                    Button("إضافة") {
+                    Button("إضافة القائمة") {
                         if !newChatPhone.isEmpty && !newChatName.isEmpty {
                             chatManager.startNewChat(phoneNumber: newChatPhone, name: newChatName)
                             newChatPhone = ""
@@ -166,7 +227,7 @@ struct MainChatsView: View {
                         }
                     }
                     .font(.headline).foregroundColor(.white)
-                    .frame(maxWidth: .infinity).padding().background(Color.blue).cornerRadius(10)
+                    .frame(maxWidth: .infinity).padding().background(Color.blue).cornerRadius(12)
                 }
                 .padding(30)
             }
@@ -174,7 +235,7 @@ struct MainChatsView: View {
     }
 }
 
-// 3. شاشة غرفة الدردشة
+// MARK: - 3. غرفة الدردشة الكاملة والذكية للكيبورد
 struct ChatRoomView: View {
     let targetUser: ChatUser
     @EnvironmentObject var chatManager: ChatManager
@@ -182,51 +243,59 @@ struct ChatRoomView: View {
     
     var body: some View {
         VStack {
+            // عرض الرسائل المتبادلة
             ScrollView {
-                VStack(spacing: 12) {
-                    ForEach(chatManager.messages.filter {
-                        ($0.senderPhone == chatManager.currentUserPhone && $0.receiverPhone == targetUser.phoneNumber) ||
-                        ($0.senderPhone == targetUser.phoneNumber && $0.receiverPhone == chatManager.currentUserPhone) ||
-                        (targetUser.phoneNumber == "0500000000" && $0.senderPhone == "0500000000")
-                    }) { msg in
-                        let isCurrentUser = msg.senderPhone == chatManager.currentUserPhone
-                        HStack {
-                            if isCurrentUser { Spacer() }
-                            Text(msg.text)
-                                .padding()
-                                .background(isCurrentUser ? Color.blue : Color(.systemGray5))
-                                .foregroundColor(isCurrentUser ? .white : .black)
-                                .cornerRadius(16)
-                            if !isCurrentUser { Spacer() }
+                ScrollViewReader { proxy in
+                    VStack(spacing: 12) {
+                        ForEach(chatManager.messages) { msg in
+                            let isCurrentUser = msg.senderPhone == chatManager.currentUserPhone
+                            HStack {
+                                if isCurrentUser { Spacer() }
+                                Text(msg.text)
+                                    .padding(14)
+                                    .background(isCurrentUser ? Color.blue : Color(.systemGray5))
+                                    .foregroundColor(isCurrentUser ? .white : .primary)
+                                    .cornerRadius(16)
+                                if !isCurrentUser { Spacer() }
+                            }
+                            .padding(.horizontal)
+                            .id(msg.id)
                         }
-                        .padding(.horizontal)
                     }
+                    .padding(.top)
                 }
             }
             
-            HStack {
-                TextField("اكتب رسالتك...", text: $messageText)
+            // منطقة الإدخال السفلية المحمية من الكيبورد تلقائياً بنظام iOS الناتيڤ
+            HStack(spacing: 10) {
+                TextField("اكتب رسالتك هنا...", text: $messageText)
                     .padding(12)
                     .background(Color(.systemGray6))
-                    .cornerRadius(20)
+                    .cornerRadius(25)
                 
-                Button(action: send) {
+                Button(action: {
+                    chatManager.sendMessage(to: targetUser.phoneNumber, text: messageText)
+                    messageText = ""
+                }) {
                     Image(systemName: "paperplane.fill")
-                        .font(.title2)
                         .foregroundColor(.white)
-                        .padding(10)
+                        .padding(12)
                         .background(messageText.isEmpty ? Color.gray : Color.blue)
-                        .cornerRadius(20)
+                        .cornerRadius(25)
                 }
                 .disabled(messageText.isEmpty)
             }
             .padding()
         }
         .navigationTitle(targetUser.name)
+        .navigationBarTitleDisplayMode(.inline)
     }
-    
-    func send() {
-        chatManager.sendMessage(to: targetUser.phoneNumber, text: messageText)
-        messageText = ""
+}
+
+// مساعد التحقق الامتدادي
+extension String {
+    func allConstraints(_ predicate: (Character) -> Bool) -> Bool {
+        for char in self { if !predicate(char) { return false } }
+        return true
     }
 }
