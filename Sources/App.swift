@@ -1,7 +1,6 @@
 import SwiftUI
-import Foundation
 
-// MARK: - البيانات البرمجية (Models)
+// MARK: - نماذج البيانات (Models)
 struct Message: Identifiable, Codable {
     let id: UUID
     let senderPhone: String
@@ -16,14 +15,23 @@ struct ChatUser: Identifiable, Codable {
     let name: String
 }
 
-// MARK: - إدارة البيانات والمراسلة (Chat Engine)
+// MARK: - محرك إدارة المحادثات (Chat Engine)
 class ChatManager: ObservableObject {
     @Published var currentUserPhone: String = ""
     @Published var isLoggedIn: Bool = false
     @Published var activeChats: [ChatUser] = []
     @Published var messages: [Message] = []
     
-    // محاكاة إرسال رسالة (سيتم ربطها بـ Supabase لاحقاً)
+    init() {
+        // محادثات تجريبية أولية للتأكد من عمل الواجهة فور التثبيت
+        activeChats = [
+            ChatUser(phoneNumber: "0500000000", name: "بدر (تجربة)")
+        ]
+        messages = [
+            Message(id: UUID(), senderPhone: "0500000000", receiverPhone: "", text: "مرحباً بك في تطبيق المراسلة الجديد! 💬", timestamp: Date())
+        ]
+    }
+    
     func sendMessage(to receiver: String, text: String) {
         let newMessage = Message(
             id: UUID(),
@@ -35,7 +43,6 @@ class ChatManager: ObservableObject {
         self.messages.append(newMessage)
     }
     
-    // إضافة شخص جديد للمراسلة عبر رقم الجوال
     func startNewChat(phoneNumber: String, name: String) {
         if !activeChats.contains(where: { $0.phoneNumber == phoneNumber }) {
             let newUser = ChatUser(phoneNumber: phoneNumber, name: name)
@@ -44,10 +51,9 @@ class ChatManager: ObservableObject {
     }
 }
 
-// MARK: - الواجهات الرسومية (UI)
-
+// MARK: - نقطة انطلاق التطبيق الرسمية لبيئة iOS
 @main
-struct PartOfMeApp: App {
+struct ChatApplication: App {
     @StateObject private var chatManager = ChatManager()
     
     var body: some Scene {
@@ -63,61 +69,54 @@ struct PartOfMeApp: App {
     }
 }
 
-// 1. واجهة الدخول برقم الجوال
+// 1. واجهة تسجيل الدخول برقم الجوال
 struct LoginView: View {
     @EnvironmentObject var chatManager: ChatManager
     @State private var phoneNumber = ""
-    @State private var errorMessage = ""
     
     var body: some View {
-        VContext {
-            VStack(spacing: 25) {
-                Text("💬")
-                    .font(.system(size: 80))
-                
-                Text("تسجيل الدخول برقم الجوال")
-                    .font(.title2)
-                    .bold()
-                
-                TextField("أدخل رقم جوالك (مثال: 05xxxxxxx)", text: $phoneNumber)
-                    .keyboardType(.phonePad)
+        VStack(spacing: 25) {
+            Spacer()
+            Text("💬")
+                .font(.system(size: 80))
+            
+            Text("تطبيق المراسلة الفورية")
+                .font(.title)
+                .bold()
+            
+            Text("المراسلة الآمنة برقم الجوال فقط")
+                .font(.subheadline)
+                .foregroundColor(.gray)
+            
+            TextField("أدخل رقم جوالك", text: $phoneNumber)
+                .padding()
+                .background(Color(.systemGray6))
+                .cornerRadius(12)
+                .multilineTextAlignment(.center)
+            
+            Button(action: login) {
+                Text("دخول")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
                     .padding()
-                    .background(Color(.systemGray6))
+                    .background(phoneNumber.count >= 10 ? Color.blue : Color.gray)
                     .cornerRadius(12)
-                    .multilineTextAlignment(.center)
-                
-                if !errorMessage.isEmpty {
-                    Text(errorMessage)
-                        .foregroundColor(.red)
-                        .font(.caption)
-                }
-                
-                Button(action: login) {
-                    Text("ابدأ المراسلة")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(phoneNumber.count >= 10 ? Color.blue : Color.gray)
-                        .cornerRadius(12)
-                }
-                .disabled(phoneNumber.count < 10)
             }
-            .padding(30)
+            .disabled(phoneNumber.count < 10)
+            
+            Spacer()
         }
+        .padding(30)
     }
     
     func login() {
-        if phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            errorMessage = "الرجاء إدخال رقم جوال صحيح"
-        } else {
-            chatManager.currentUserPhone = phoneNumber
-            chatManager.isLoggedIn = true
-        }
+        chatManager.currentUserPhone = phoneNumber
+        chatManager.isLoggedIn = true
     }
 }
 
-// 2. واجهة المحادثات النشطة
+// 2. واجهة قائمة المحادثات النشطة
 struct MainChatsView: View {
     @EnvironmentObject var chatManager: ChatManager
     @State private var showAddChat = false
@@ -152,7 +151,6 @@ struct MainChatsView: View {
                     TextField("اسم الشخص", text: $newChatName)
                         .padding().background(Color(.systemGray6)).cornerRadius(10)
                     TextField("رقم الجوال", text: $newChatPhone)
-                        .keyboardType(.phonePad)
                         .padding().background(Color(.systemGray6)).cornerRadius(10)
                     
                     Button("إضافة") {
@@ -172,7 +170,7 @@ struct MainChatsView: View {
     }
 }
 
-// 3. شاشة غرفة الدردشة بين شخصين
+// 3. شاشة محادثة غرف الدردشة
 struct ChatRoomView: View {
     let targetUser: ChatUser
     @EnvironmentObject var chatManager: ChatManager
@@ -184,7 +182,8 @@ struct ChatRoomView: View {
                 VStack(spacing: 12) {
                     ForEach(chatManager.messages.filter {
                         ($0.senderPhone == chatManager.currentUserPhone && $0.receiverPhone == targetUser.phoneNumber) ||
-                        ($0.senderPhone == targetUser.phoneNumber && $0.receiverPhone == chatManager.currentUserPhone)
+                        ($0.senderPhone == targetUser.phoneNumber && $0.receiverPhone == chatManager.currentUserPhone) ||
+                        (targetUser.phoneNumber == "0500000000" && $0.senderPhone == "0500000000") // عرض الرسالة الترحيبية للتحقق
                     }) { msg in
                         let isCurrentUser = msg.senderPhone == chatManager.currentUserPhone
                         HStack {
@@ -202,7 +201,7 @@ struct ChatRoomView: View {
             }
             
             HStack {
-                TextField("اكتب رسالتك هنا...", text: $messageText)
+                TextField("اكتب رسالتك...", text: $messageText)
                     .padding(12)
                     .background(Color(.systemGray6))
                     .cornerRadius(20)
@@ -220,7 +219,6 @@ struct ChatRoomView: View {
             .padding()
         }
         .navigationTitle(targetUser.name)
-        .navigationBarTitleDisplayMode(.inline)
     }
     
     func send() {
@@ -228,10 +226,51 @@ struct ChatRoomView: View {
         messageText = ""
     }
 }
+EOF\cat << 'EOF' > .github/workflows/build.yml
+name: Build iOS IPA
 
-// مساعد تنسيق الواجهات
-struct VContext<Content: View>: View {
-    let content: Content
-    init(@ViewBuilder content: () -> Content) { self.content = content() }
-    var body: some View { content }
-}
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Xcode Version
+      run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+    - name: Pure Cross-Compile via Swiftc
+      run: |
+        # استخراج مسار حزمة الآيفون الصافية بشكل معزول تماماً عن الماك
+        SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+        
+        # التجميع النهائي والمباشر لملف السورس إلى حزمة تنفيذية للآيفون
+        swiftc Sources/App.swift \
+          -sdk "$SDK_PATH" \
+          -target arm64-apple-ios16.0 \
+          -O \
+          -o PartOfMeApp
+
+    - name: Export Payload structure for TrollStore
+      run: |
+        # إنشاء الهيكل الرسمي للتطبيق ليتعرف عليه الهاتف
+        mkdir -p Payload/PartOfMeApp.app
+        mv PartOfMeApp Payload/PartOfMeApp.app/PartOfMeApp
+        
+        # حقن ملف الخصائص الرقمي الأساسي
+        echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>PartOfMeApp</string><key>CFBundleIdentifier</key><string>com.badr.partofme</string><key>CFBundleName</key><string>مراسلة الجوال</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>MinimumOSVersion</key><string>16.0</string></dict></plist>' > Payload/PartOfMeApp.app/Info.plist
+        
+        # إنتاج الحزمة النهائية المضغوطة بالامتداد المطلوب لـ TrollStore
+        zip -r PartOfMe.ipa Payload
+        
+    - name: Upload Unsigned IPA Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: PartOfMe-Chat-IPA
+        path: PartOfMe.ipa
