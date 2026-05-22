@@ -15,11 +15,10 @@ struct ChatUser: Identifiable, Codable {
     let name: String
 }
 
-// MARK: - محرك إدارة المحادثات المحصن (Enhanced Chat Engine)
+// MARK: - محرك إدارة المحادثات المحصن
 class ChatManager: ObservableObject {
     @Published var currentUserPhone: String = "" {
         didSet {
-            // حفظ الرقم تلقائياً لتجنب تسجيل الدخول المتكرر
             UserDefaults.standard.set(currentUserPhone, forKey: "saved_phone")
         }
     }
@@ -28,13 +27,11 @@ class ChatManager: ObservableObject {
     @Published var messages: [Message] = []
     
     init() {
-        // استعادة الجلسة السابقة إن وجدت
         if let savedPhone = UserDefaults.standard.string(forKey: "saved_phone"), !savedPhone.isEmpty {
             self.currentUserPhone = savedPhone
             self.isLoggedIn = true
         }
         
-        // بيانات أولية تفتح النفس وتضمن عدم فراغ التطبيق
         activeChats = [
             ChatUser(phoneNumber: "0500000000", name: "الدعم الفني 👋"),
             ChatUser(phoneNumber: "0511111111", name: "المطور بدر 🚀")
@@ -89,16 +86,15 @@ struct ChatApplication: App {
     }
 }
 
-// MARK: - 1. واجهة تسجيل الدخول المطورة (Anti-Keyboard Block)
+// MARK: - 1. واجهة تسجيل الدخول المطورة
 struct LoginView: View {
     @EnvironmentObject var chatManager: ChatManager
     @State private var phoneNumber = ""
     @FocusState private var isKeyfocused: Bool
     
-    // التحقق من أن المدخلات أرقام فقط وبطول صحيح
+    // تم تغيير التحقق هنا ليكون داخلي ومباشر متوافق مع المترجم السحابي
     var isPhoneValid: Bool {
-        let isNumeric = phoneNumber.allConstraints { $0.isNumber }
-        return phoneNumber.count >= 10 && isNumeric
+        return phoneNumber.count >= 10 && phoneNumber.allSatisfy { $0.isNumber }
     }
     
     var body: some View {
@@ -108,7 +104,6 @@ struct LoginView: View {
             VStack {
                 Spacer()
                 
-                // أيقونة الواجهة عصرية
                 ZStack {
                     Circle()
                         .fill(Color.blue.opacity(0.1))
@@ -128,7 +123,6 @@ struct LoginView: View {
                 
                 Spacer()
                 
-                // حقل الإدخال في موقع مرن يتكيف تلقائياً مع الكيبورد
                 VStack(alignment: .leading, spacing: 10) {
                     TextField("05xxxxxxxx", text: $phoneNumber)
                         .keyboardType(.phonePad)
@@ -235,7 +229,7 @@ struct MainChatsView: View {
     }
 }
 
-// MARK: - 3. غرفة الدردشة الكاملة والذكية للكيبورد
+// MARK: - 3. غرفة الدردشة الكاملة والذكية
 struct ChatRoomView: View {
     let targetUser: ChatUser
     @EnvironmentObject var chatManager: ChatManager
@@ -243,30 +237,25 @@ struct ChatRoomView: View {
     
     var body: some View {
         VStack {
-            // عرض الرسائل المتبادلة
             ScrollView {
-                ScrollViewReader { proxy in
-                    VStack(spacing: 12) {
-                        ForEach(chatManager.messages) { msg in
-                            let isCurrentUser = msg.senderPhone == chatManager.currentUserPhone
-                            HStack {
-                                if isCurrentUser { Spacer() }
-                                Text(msg.text)
-                                    .padding(14)
-                                    .background(isCurrentUser ? Color.blue : Color(.systemGray5))
-                                    .foregroundColor(isCurrentUser ? .white : .primary)
-                                    .cornerRadius(16)
-                                if !isCurrentUser { Spacer() }
-                            }
-                            .padding(.horizontal)
-                            .id(msg.id)
+                VStack(spacing: 12) {
+                    ForEach(chatManager.messages) { msg in
+                        let isCurrentUser = msg.senderPhone == chatManager.currentUserPhone
+                        HStack {
+                            if isCurrentUser { Spacer() }
+                            Text(msg.text)
+                                .padding(14)
+                                .background(isCurrentUser ? Color.blue : Color(.systemGray5))
+                                .foregroundColor(isCurrentUser ? .white : .primary)
+                                .cornerRadius(16)
+                            if !isCurrentUser { Spacer() }
                         }
+                        .padding(.horizontal)
                     }
-                    .padding(.top)
                 }
+                .padding(.top)
             }
             
-            // منطقة الإدخال السفلية المحمية من الكيبورد تلقائياً بنظام iOS الناتيڤ
             HStack(spacing: 10) {
                 TextField("اكتب رسالتك هنا...", text: $messageText)
                     .padding(12)
@@ -289,13 +278,5 @@ struct ChatRoomView: View {
         }
         .navigationTitle(targetUser.name)
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-// مساعد التحقق الامتدادي
-extension String {
-    func allConstraints(_ predicate: (Character) -> Bool) -> Bool {
-        for char in self { if !predicate(char) { return false } }
-        return true
     }
 }
