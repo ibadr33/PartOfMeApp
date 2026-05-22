@@ -18,13 +18,14 @@ jobs:
 
     - name: Direct iPhone Compilation via swiftc
       run: |
-        # جلب الـ SDK النقي المخصص للـ iOS عزل تام عن نظام الماك
+        # جلب الـ SDK النقي المخصص للـ iOS
         SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
         
-        # أمر تجميع الملف الفردي المباشر لمنصات الـ arm64
+        # أمر التجميع المباشر مع إضافة العلم الحاسم لحل مشكلة الـ top-level code
         swiftc App.swift \
           -sdk "$SDK_PATH" \
           -target arm64-apple-ios16.0 \
+          -parse-as-library \
           -O \
           -o PartOfMeApp
 
