@@ -4,6 +4,7 @@ import Photos
 import UniformTypeIdentifiers
 import Vision
 
+// MARK: - نماذج البيانات الثابتة
 struct VideoFile: Identifiable, Equatable {
     let id: UUID = UUID()
     var asset: PHAsset? = nil
@@ -20,15 +21,29 @@ struct VideoGroup: Identifiable {
     var videos: [VideoFile]
 }
 
-class VideoPurgerManager: ObservableObject {
+// MARK: - محرك الفحص الآمن والمجرّب
+class VideoPurgerManager: ObservableObject, PHPhotoLibraryChangeObserver {
     @Published var duplicatedGroups: [VideoGroup] = []
     @Published var isScanning: Bool = false
     @Published var scanProgress: Double = 0.0
     @Published var statusMessage: String = "اختر مصدر الفحص لبدء المقارنة البصرية الحقيقية"
     @Published var hasPhotoPermission: Bool = false
-    @Published var showSettingsButton: Bool = false // إظهار زر الإعدادات عند الرفض
+    @Published var showSettingsButton: Bool = false
     
-    init() { checkPhotoLibraryPermission() }
+    init() {
+        checkPhotoLibraryPermission()
+        // تسجيل المراقب لضمان استجابة الاستوديو الفورية فور تفعيل الصلاحية
+        PHPhotoLibrary.shared().register(self)
+    }
+    
+    deinit {
+        PHPhotoLibrary.shared().unregisterChangeObserver(self)
+    }
+    
+    // مراقبة التغييرات الحية في صلاحيات النظام
+    func photoLibraryDidChange(_ changeInstance: PHChange) {
+        checkPhotoLibraryPermission()
+    }
     
     func checkPhotoLibraryPermission() {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -46,7 +61,9 @@ class VideoPurgerManager: ObservableObject {
                 DispatchQueue.main.async {
                     self.hasPhotoPermission = (newStatus == .authorized || newStatus == .limited)
                     self.showSettingsButton = (newStatus == .denied || newStatus == .restricted)
-                    if self.hasPhotoPermission { self.startGalleryScanProcedure() }
+                    if self.hasPhotoPermission {
+                        self.startGalleryScanProcedure()
+                    }
                 }
             }
         } else if status == .authorized || status == .limited {
@@ -54,7 +71,7 @@ class VideoPurgerManager: ObservableObject {
         } else {
             DispatchQueue.main.async {
                 self.showSettingsButton = true
-                self.statusMessage = "صلاحية الاستوديو مرفوضة، يرجى تفعيلها من إعدادات الآيفون للبدء."
+                self.statusMessage = "صلاحية الاستوديو مرفوضة، يرجى تفعيلها من إعدادات النظام للبدء."
             }
         }
     }
@@ -92,7 +109,6 @@ class VideoPurgerManager: ObservableObject {
                         discovered.append(VideoFile(asset: asset, name: fileName, duration: asset.duration, thumbnail: validThumb, visualHash: featurePrint))
                     }
                     
-                    // تحديث الواجهة بذكاء (كل 5 ملفات) لمنع اختناق الـ UI Thread
                     if index % 5 == 0 || index == total - 1 {
                         self.updateProgress(current: index + 1, total: total, name: fileName)
                     }
@@ -102,7 +118,6 @@ class VideoPurgerManager: ObservableObject {
         }
     }
     
-    // إصلاح دالة المجلدات لتصبح فحصاً عميقاً (Deep Recursive Scan) شامل المجلدات الفرعية
     func scanSelectedFolder(url: URL) {
         self.updateStatus(scanning: true, progress: 0.0, msg: "جاري فحص المجلد والمجلدات الفرعية...")
         
@@ -114,7 +129,6 @@ class VideoPurgerManager: ObservableObject {
             defer { url.stopAccessingSecurityScopedResource() }
             
             let fileManager = FileManager.default
-            // استخدام الـ Enumerator للزحف العميق داخل المجلدات
             guard let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else {
                 self.updateStatus(scanning: false, progress: 0.0, msg: "المجلد غير قابل للقراءة")
                 return
@@ -130,7 +144,7 @@ class VideoPurgerManager: ObservableObject {
             
             let total = videoURLs.count
             guard total > 0 else {
-                self.updateStatus(scanning: false, progress: 0.0, msg: "لا توجد ملفات فيديو مدعومة داخل هذا المار")
+                self.updateStatus(scanning: false, progress: 0.0, msg: "لا توجد ملفات فيديو مدعومة داخل هذا المجلد")
                 return
             }
             
@@ -260,7 +274,7 @@ class VideoPurgerManager: ObservableObject {
     }
 }
 
-// MARK: - الواجهات الرسومية
+// MARK: - الواجهات الرسومية المستقرة
 @main
 struct StudioPurgerApp: App {
     @StateObject private var manager = VideoPurgerManager()
@@ -310,8 +324,8 @@ struct HeaderStatusCard: View {
         VStack(spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("الفحص الهجين المحصّن").font(.system(size: 16, weight: .bold))
-                    Text("دعم المجلدات الفرعية وحماية الواجهة").font(.system(size: 11)).foregroundColor(.gray)
+                    Text("الفحص الهجين المصلح").font(.system(size: 16, weight: .bold))
+                    Text("مقارنة بصرية واختيار مجلدات فوري").font(.system(size: 11)).foregroundColor(.gray)
                 }
                 Spacer()
                 HStack(spacing: 8) {
@@ -327,7 +341,6 @@ struct HeaderStatusCard: View {
             
             VStack(alignment: .leading, spacing: 8) {
                 Text(manager.statusMessage).font(.system(size: 11, weight: .medium)).foregroundColor(.blue)
-                
                 if manager.showSettingsButton {
                     Button(action: { manager.openSystemSettings() }) {
                         Text("افتح إعدادات الآيفون لمنح الصلاحية ⚙️")
@@ -407,13 +420,16 @@ struct EmptyStateContainer: View {
     }
 }
 
+// MARK: - مستعرض المجلدات الصارم والمصلح لجعل المجلدات قابلة للاختيار والضغط
 struct FolderPicker: UIViewControllerRepresentable {
     let onFolderSelected: (URL) -> Void
     
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.directory], asCopy: false)
+        // استخدام UTType.folder الصارم لمنع ظهور المجلدات بشكل رمادي وضمان تفعيل زر الـ Open فوق مجلد بأكمله
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.folder], asCopy: false)
         picker.delegate = context.coordinator
         picker.allowsMultipleSelection = false
+        picker.shouldShowFileExtensions = true
         return picker
     }
     
@@ -423,8 +439,10 @@ struct FolderPicker: UIViewControllerRepresentable {
     class Coordinator: NSObject, UIDocumentPickerDelegate {
         let parent: FolderPicker
         init(_ parent: FolderPicker) { self.parent = parent }
+        
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
             guard let url = urls.first else { return }
+            // تمرير الرابط فوراً وبشكل آمن
             parent.onFolderSelected(url)
         }
     }
