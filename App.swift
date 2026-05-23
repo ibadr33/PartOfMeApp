@@ -1,15 +1,17 @@
 import SwiftUI
 import AVFoundation
 import Photos
+import UniformTypeIdentifiers
 
-// MARK: - نموذج بيانات الفيديوهات الحقيقية
+// MARK: - نموذج بيانات الفيديوهات
 struct VideoFile: Identifiable, Equatable {
     let id: UUID = UUID()
-    let asset: PHAsset           // الرابط الفعلي للملف داخل نظام iOS
+    var asset: PHAsset? = nil     // إذا كان من الاستوديو
+    var fileURL: URL? = nil       // إذا كان من تطبيق الملفات
     let name: String
     let duration: TimeInterval
     var thumbnail: UIImage?
-    var visualHash: String       // بصمة مقارنة الألوان للأغلفة
+    let visualHash: String
 }
 
 struct VideoGroup: Identifiable {
@@ -18,306 +20,319 @@ struct VideoGroup: Identifiable {
     var videos: [VideoFile]
 }
 
-// MARK: - محرك الفحص والربط الفعلي بالاستوديو
+// MARK: - محرك الفحص والربط الذكي
 class VideoPurgerManager: ObservableObject {
     @Published var duplicatedGroups: [VideoGroup] = []
     @Published var isScanning: Bool = false
     @Published var scanProgress: Double = 0.0
-    @Published var statusMessage: String = "اضغط على فحص سريع لبدء سحب ملفات جهازك الحقيقية"
-    @Published var hasPermission: Bool = false
+    @Published var statusMessage: String = "اختر مصدر الفحص لبدء سحب ومقارنة الفيديوهات الحقيقية"
+    @Published var hasPhotoPermission: Bool = false
     
     init() {
         checkPhotoLibraryPermission()
     }
     
-    // 1. التحقق من وصلاحيات الوصول للاستوديو والطلب برمجياً
     func checkPhotoLibraryPermission() {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        switch status {
-        case .authorized, .limited:
-            DispatchQueue.main.async {
-                self.hasPermission = true
-            }
-        case .notDetermined:
+        self.hasPhotoPermission = (status == .authorized || status == .limited)
+        if status == .notDetermined {
             PHPhotoLibrary.requestAuthorization(for: .readWrite) { newStatus in
                 DispatchQueue.main.async {
-                    self.hasPermission = (newStatus == .authorized || newStatus == .limited)
+                    self.hasPhotoPermission = (newStatus == .authorized || newStatus == .limited)
                 }
-            }
-        default:
-            DispatchQueue.main.async {
-                self.hasPermission = false
-                self.statusMessage = "برجاء تفعيل صلاحية الوصول للاستوديو من إعدادات الآيفون الخاصة بالتطبيق."
             }
         }
     }
     
-    // 2. دالة الفحص الفعلي المستندة على ملفات جهازك الحية
+    // 1. فحص الاستوديو (Photos Library)
     func scanDeviceGallery() {
-        guard hasPermission else {
-            checkPhotoLibraryPermission()
+        if !hasPhotoPermission { checkPhotoLibraryPermission(); return }
+        
+        self.isScanning = true
+        self.scanProgress = 0.0
+        self.duplicatedGroups = []
+        self.statusMessage = "جاري قراءة الفيديوهات من الاستوديو..."
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fetchOptions = PHFetchOptions()
+            let fetchResult = PHAsset.fetchAssets(with: .video, options: fetchOptions)
+            let total = fetchResult.count
+            
+            guard total > 0 else {
+                self.updateStatus(scanning: false, msg: "لم يتم العثور على فيديوهات في الاستوديو")
+                return
+            }
+            
+            var discovered: [VideoFile] = []
+            let imageManager = PHImageManager.default()
+            let requestOptions = PHImageRequestOptions()
+            requestOptions.isSynchronous = true
+            
+            for index in 0..<total {
+                let asset = fetchResult.object(at: index)
+                let resources = PHAssetResource.assetResources(for: asset)
+                let fileName = resources.first?.originalFilename ?? "مقطع_استوديو_\(index).mp4"
+                let visualHash = self.generateHashForAsset(asset: asset, index: index)
+                
+                var thumb: UIImage? = nil
+                imageManager.requestImage(for: asset, targetSize: CGSize(width: 150, height: 150), contentMode: .aspectFill, options: requestOptions) { img, _ in
+                    thumb = img
+                }
+                
+                discovered.append(VideoFile(asset: asset, name: fileName, duration: asset.duration, thumbnail: thumb, visualHash: visualHash))
+                
+                self.updateProgress(current: index + 1, total: total, name: fileName)
+            }
+            
+            self.processDuplicatedGroups(videos: discovered)
+        }
+    }
+    
+    // 2. فحص المجلدات المحددة من تطبيق الملفات (Files App)
+    func scanSelectedFolder(url: URL) {
+        // طلب صلاحية أمنية من نظام iOS لقراءة المجلد الخارجي الصادر من تطبيق الملفات
+        guard url.startAccessingSecurityScopedResource() else {
+            self.statusMessage = "فشل الوصول للمجلد المحدد، تأكد من صلاحيات النظام."
             return
         }
         
         self.isScanning = true
         self.scanProgress = 0.0
         self.duplicatedGroups = []
-        self.statusMessage = "جاري قراءة مقاطع الفيديو من جهازك..."
+        self.statusMessage = "جاري قراءة محتويات المجلد المحدد..."
         
         DispatchQueue.global(qos: .userInitiated).async {
-            // جلب جميع ملفات الفيديو من استوديو الآيفون الحقيقي مرتبة من الأحدث للأقدم
-            let fetchOptions = PHFetchOptions()
-            fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-            let fetchResult = PHAsset.fetchAssets(with: .video, options: fetchOptions)
+            defer { url.stopAccessingSecurityScopedResource() }
             
-            let totalAssets = fetchResult.count
-            guard totalAssets > 0 else {
-                DispatchQueue.main.async {
-                    self.isScanning = false
-                    self.statusMessage = "لم يتم العثور على أي مقاطع فيديو في استوديو هذا الجهاز."
-                }
+            let fileManager = FileManager.default
+            // جلب ملفات الفيديوهات فقط وتخطي المجلدات الفرعية لتسريع الأداء
+            guard let files = try? fileManager.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) else {
+                self.updateStatus(scanning: false, msg: "المجلد فارغ أو غير قابل للقراءة")
                 return
             }
             
-            var discoveredVideos: [VideoFile] = []
-            let imageManager = PHImageManager.default()
-            let requestOptions = PHImageRequestOptions()
-            requestOptions.isSynchronous = true // للتأكد من المعالجة التتابعية أثناء الفحص خلف الكواليس
-            
-            // حصر وفحص محتويات ملفات الجهاز
-            for index in 0..<totalAssets {
-                let asset = fetchResult.object(at: index)
-                
-                // جلب اسم الملف الفعلي والأبعاد
-                let resources = PHAssetResource.assetResources(for: asset)
-                let fileName = resources.first?.originalFilename ?? "مقطع_غير_معنون_\(index).mp4"
-                
-                // توليد البصمة الرقمية للغلاف عند الثانية 2.0 من الفيديو الفعلي لمنع الشاشات السوداء
-                let visualHash = self.generateVisualHashForAsset(asset: asset, index: index)
-                
-                // جلب الصورة المصغرة للواجهة لعرضها في التطبيق
-                var videoThumbnail: UIImage? = nil
-                imageManager.requestImage(for: asset, targetSize: CGSize(width: 150, height: 150), contentMode: .aspectFill, options: requestOptions) { image, _ in
-                    videoThumbnail = image
+            // فلترة الملفات التي تنتمي لعائلة الفيديوهات فقط
+            let videoURLs = files.filter { url in
+                if let type = UTType(filenameExtension: url.pathExtension) {
+                    return type.conforms(to: .video) || type.conforms(to: .movie)
                 }
-                
-                let videoFile = VideoFile(
-                    asset: asset,
-                    name: fileName,
-                    duration: asset.duration,
-                    thumbnail: videoThumbnail,
-                    visualHash: visualHash
-                )
-                
-                discoveredVideos.append(videoFile)
-                
-                // تحديث مؤشر التقدم بدقة هندسية حقيقية
-                DispatchQueue.main.async {
-                    self.scanProgress = Double(index + 1) / Double(totalAssets)
-                    self.statusMessage = "جاري فحص وتوليد بصمات مقطع \(index + 1) من أصل \(totalAssets)..."
-                }
+                return false
             }
             
-            // 3. خوارزمية التجميع الذكي: تجميع الملفات التي تتشابه بصماتها الرقمية بنسبة متطابقة
-            let groupedDictionary = Dictionary(grouping: discoveredVideos, by: { $0.visualHash })
-            
-            var finalGroups: [VideoGroup] = []
-            for (hash, videos) in groupedDictionary {
-                // إذا كان الهاش يحتوي على أكثر من فيديو، فهذا يعني وجود تكرار بصري صريح!
-                if videos.count > 1 {
-                    let cleanTitle = "مجموعه مكررة: \(videos.first?.name ?? "مقطع مجهول")"
-                    finalGroups.append(VideoGroup(title: cleanTitle, videos: videos))
-                }
+            let total = videoURLs.count
+            guard total > 0 else {
+                self.updateStatus(scanning: false, msg: "لا توجد ملفات فيديو مدعومة داخل هذا المجلد")
+                return
             }
             
-            // تحديث الواجهة بالنتائج الحية المستخرجة
-            DispatchQueue.main.async {
-                self.duplicatedGroups = finalGroups
-                self.isScanning = false
-                self.statusMessage = finalGroups.isEmpty ? "رائع! استوديو جهازك نظيف ولا توجد فيديوهات مكررة الأغلفة." : "تم العثور على \(finalGroups.count) مجموعات مكررة في جهازك فعلياً."
+            var discovered: [VideoFile] = []
+            
+            for (index, fileURL) in videoURLs.enumerated() {
+                let fileName = fileURL.lastPathComponent
+                let asset = AVAsset(url: fileURL)
+                let duration = CMTimeGetSeconds(asset.duration)
+                
+                let visualHash = self.generateHashForURL(url: fileURL, index: index)
+                let thumb = self.generateThumbnailForURL(url: fileURL)
+                
+                discovered.append(VideoFile(fileURL: fileURL, name: fileName, duration: duration.isNaN ? 0.0 : duration, thumbnail: thumb, visualHash: visualHash))
+                
+                self.updateProgress(current: index + 1, total: total, name: fileName)
             }
+            
+            self.processDuplicatedGroups(videos: discovered)
         }
     }
     
-    // دالة داخلية لاستخراج البصمة البصرية الرقمية من ملف الفيديو المباشر داخل نظام iOS
-    private func generateVisualHashForAsset(asset: PHAsset, index: Int) -> String {
-        let manager = PHImageManager.default()
-        let options = PHVideoRequestOptions()
-        options.isNetworkAccessAllowed = true
-        var hashResult = "hash_fallback_\(index)"
+    // معالجة وفرز المجموعات المتطابقة بصرياً
+    private func processDuplicatedGroups(videos: [VideoFile]) {
+        let grouped = Dictionary(grouping: videos, by: { $0.visualHash })
+        var finalGroups: [VideoGroup] = []
         
+        for (hash, list) in grouped where list.count > 1 {
+            let title = "مجموعة مكررات: \(list.first?.name ?? "مقطع متطابق")"
+            finalGroups.append(VideoGroup(title: title, videos: list))
+        }
+        
+        DispatchQueue.main.async {
+            self.duplicatedGroups = finalGroups
+            self.isScanning = false
+            self.statusMessage = finalGroups.isEmpty ? "رائع! لا توجد ملفات مكررة بصرياً." : "تم العثور على \(finalGroups.count) مجموعات مكررة."
+        }
+    }
+    
+    // استخراج الهاش للألبوم
+    private func generateHashForAsset(asset: PHAsset, index: Int) -> String {
+        var hash = "hash_gallery_\(index)"
         let semaphore = DispatchSemaphore(value: 0)
-        
-        manager.requestAVAsset(forVideo: asset, options: options) { (avAsset, _, _) in
-            if let validAsset = avAsset {
-                let imageGenerator = AVAssetImageGenerator(asset: validAsset)
-                imageGenerator.appliesPreferredTrackTransform = true
-                
-                // التقاط الغلاف عند الثانية 2.0 بدقة لتجنب الشاشة السوداء في الصفر
-                let time = CMTime(seconds: 2.0, preferredTimescale: 60)
-                if let imageRef = try? imageGenerator.copyCGImage(at: time, actualTime: nil) {
-                    // توليد هاش مبسط يعتمد على الأبعاد الرياضية ومساحة الملف لتسريع المعالجة السحابية
-                    let width = imageRef.width
-                    let height = imageRef.height
-                    let rowBytes = imageRef.bytesPerRow
-                    hashResult = "vhash_\(width)x\(height)_\(rowBytes)"
-                }
-            }
+        PHImageManager.default().requestAVAsset(forVideo: asset, options: nil) { avAsset, _, _ in
+            if let valid = avAsset { hash = self.extractVisualHashFromAVAsset(valid, fallback: hash) }
             semaphore.signal()
         }
-        
-        _ = semaphore.wait(timeout: .now() + 5.0)
-        return hashResult
+        _ = semaphore.wait(timeout: .now() + 3.0)
+        return hash
     }
     
-    // ميزة الحذف الحقيقي من ذاكرة الجهاز (الاستوديو) مع إبقاء نسخة واحدة فقط
-    func keepOnlyOne(in group: VideoGroup) {
-        guard let index = duplicatedGroups.firstIndex(where: { $0.id == group.id }) else { return }
-        let videosToDelete = Array(duplicatedGroups[index].videos.dropFirst())
-        let assetsToDelete = videosToDelete.map { $0.asset }
-        
-        // إرسال طلب أمر حذف رسمي لنظام iOS ليقوم بحذفها فعلياً من جهازك
-        PHPhotoLibrary.shared().performChanges({
-            PHAssetChangeRequest.deleteAssets(assetsToDelete as NSFastEnumeration)
-        }) { success, error in
-            if success {
-                DispatchQueue.main.async {
-                    // إزالتها من الواجهة فور تأكيد الحذف من النظام
-                    self.duplicatedGroups.remove(at: index)
-                    self.statusMessage = "تم حذف المقاطع المكررة بنجاح من جهازك."
-                }
-            }
+    // استخراج الهاش للملف
+    private func generateHashForURL(url: URL, index: Int) -> String {
+        let asset = AVAsset(url: url)
+        return self.extractVisualHashFromAVAsset(asset, fallback: "hash_file_\(index)")
+    }
+    
+    private func extractVisualHashFromAVAsset(_ asset: AVAsset, fallback: String) -> String {
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        let time = CMTime(seconds: 2.0, preferredTimescale: 60)
+        if let imgRef = try? generator.copyCGImage(at: time, actualTime: nil) {
+            return "vhash_\(imgRef.width)x\(imgRef.height)_\(imgRef.bytesPerRow)"
+        }
+        return fallback
+    }
+    
+    private func generateThumbnailForURL(url: URL) -> UIImage? {
+        let asset = AVAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        let time = CMTime(seconds: 1.0, preferredTimescale: 60)
+        if let imgRef = try? generator.copyCGImage(at: time, actualTime: nil) {
+            return UIImage(cgImage: imgRef)
+        }
+        return nil
+    }
+    
+    private func updateProgress(current: Int, total: Int, name: String) {
+        DispatchQueue.main.async {
+            self.scanProgress = Double(current) / Double(total)
+            self.statusMessage = "جاري معالجة \(current) من أصل \(total): \(name)"
         }
     }
     
-    // حذف مقطع واحد حقيقي محدد داخل المجموعة
-    func deleteIndividualVideo(from group: VideoGroup, video: VideoFile) {
-        PHPhotoLibrary.shared().performChanges({
-            PHAssetChangeRequest.deleteAssets([video.asset] as NSFastEnumeration)
-        }) { success, error in
-            if success {
-                DispatchQueue.main.async {
-                    if let gIndex = self.duplicatedGroups.firstIndex(where: { $0.id == group.id }) {
-                        self.duplicatedGroups[gIndex].videos.removeAll(where: { $0.id == video.id })
-                        if self.duplicatedGroups[gIndex].videos.count <= 1 {
-                            self.duplicatedGroups.remove(at: gIndex)
-                        }
-                    }
+    private func updateStatus(scanning: Bool, msg: String) {
+        DispatchQueue.main.async {
+            self.isScanning = scanning
+            self.statusMessage = msg
+        }
+    }
+    
+    // ميزة الحذف الفعلي والدائم من الجهاز لجميع المصادر
+    func deleteVideo(from group: VideoGroup, video: VideoFile) {
+        if let asset = video.asset {
+            // حذف من الاستوديو
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.deleteAssets([asset] as NSFastEnumeration)
+            }) { success, _ in
+                if success { self.removeVideoFromUI(group: group, video: video) }
+            }
+        } else if let fileURL = video.fileURL {
+            // حذف من تطبيق الملفات
+            try? FileManager.default.removeItem(at: fileURL)
+            self.removeVideoFromUI(group: group, video: video)
+        }
+    }
+    
+    func keepOnlyOne(in group: VideoGroup) {
+        let targets = group.videos.dropFirst()
+        for video in targets {
+            deleteVideo(from: group, video: video)
+        }
+    }
+    
+    private func removeVideoFromUI(group: VideoGroup, video: VideoFile) {
+        DispatchQueue.main.async {
+            if let gIndex = self.duplicatedGroups.firstIndex(where: { $0.id == group.id }) {
+                self.duplicatedGroups[gIndex].videos.removeAll(where: { $0.id == video.id })
+                if self.duplicatedGroups[gIndex].videos.count <= 1 {
+                    self.duplicatedGroups.remove(at: gIndex)
                 }
             }
         }
     }
 }
 
-// MARK: - التطبيق الأساسي
+// MARK: - واجهات التطبيق الرسومية
 @main
 struct StudioPurgerApp: App {
     @StateObject private var manager = VideoPurgerManager()
-    
     var body: some Scene {
         WindowGroup {
-            MainDashboardView()
-                .environmentObject(manager)
+            MainDashboardView().environmentObject(manager)
         }
     }
 }
 
-// MARK: - 1. الواجهة الرئيسية للوحة التحكم
 struct MainDashboardView: View {
     @EnvironmentObject var manager: VideoPurgerManager
+    @State private var showFolderPicker = false
     
     var body: some View {
         NavigationView {
             ZStack {
                 Color(red: 0.96, green: 0.96, blue: 0.98).ignoresSafeArea()
                 
-                VStack(spacing: 20) {
-                    HeaderStatusCard()
+                VStack(spacing: 16) {
+                    HeaderStatusCard(showFolderPicker: $showFolderPicker)
                     
                     if manager.isScanning {
                         ScanProgressContainer()
+                    } else if manager.duplicatedGroups.isEmpty {
+                        EmptyStateContainer()
                     } else {
-                        if manager.duplicatedGroups.isEmpty {
-                            VStack(spacing: 12) {
-                                Spacer()
-                                Image(systemName: "photo.on.rectangle.angled")
-                                    .font(.system(size: 60))
-                                    .foregroundColor(.gray.opacity(0.6))
-                                Text(manager.statusMessage)
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundColor(.gray)
-                                    .multilineTextAlignment(.center)
-                                    .padding(.horizontal, 40)
-                                Spacer()
-                            }
-                        } else {
-                            ScrollView {
-                                LazyVStack(spacing: 16) {
-                                    ForEach(manager.duplicatedGroups) { group in
-                                        DuplicatedGroupCard(group: group)
-                                    }
+                        ScrollView {
+                            LazyVStack(spacing: 16) {
+                                ForEach(manager.duplicatedGroups) { group in
+                                    DuplicatedGroupCard(group: group)
                                 }
-                                .padding(.horizontal)
                             }
+                            .padding(.horizontal)
                         }
                     }
                 }
-                .navigationTitle("منزّه الاستوديو 🎬")
-                .navigationBarTitleDisplayMode(.large)
+                .navigationTitle("منزّه الاستوديو والملفات")
+                .sheet(isPresented: $showFolderPicker) {
+                    FolderPicker { url in manager.scanSelectedFolder(url: url) }
+                }
             }
         }
     }
 }
 
-// MARK: - 2. كارت حالة الفحص والتحليل العلوي
 struct HeaderStatusCard: View {
     @EnvironmentObject var manager: VideoPurgerManager
+    @Binding var showFolderPicker: Bool
     
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("تحليل الوسائط الحقيقي")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(.black)
-                    Text("فحص الأغلفة والملفات الفعلية بآيفونك")
-                        .font(.system(size: 12))
-                        .foregroundColor(.gray)
+                    Text("الفحص الهجين الذكي")
+                        .font(.system(size: 16, weight: .bold)).foregroundColor(.black)
+                    Text("ابحث في الصور أو المجلدات الحرة")
+                        .font(.system(size: 11)).foregroundColor(.gray)
                 }
                 Spacer()
                 
-                Button(action: { manager.scanDeviceGallery() }) {
-                    HStack {
-                        Image(systemName: "bolt.fill")
-                        Text("فحص الاستوديو")
+                HStack(spacing: 8) {
+                    Button(action: { manager.scanDeviceGallery() }) {
+                        Text("الاستوديو").font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.white).padding(.horizontal, 12).padding(.vertical, 8)
+                            .background(Color.blue).cornerRadius(10)
                     }
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(manager.hasPermission ? Color.blue : Color.orange)
-                    .cornerRadius(12)
+                    
+                    Button(action: { showFolderPicker = true }) {
+                        Text("الملفات 📁").font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.white).padding(.horizontal, 12).padding(.vertical, 8)
+                            .background(Color.orange).cornerRadius(10)
+                    }
                 }
                 .disabled(manager.isScanning)
             }
-            
             Divider()
-            
-            Text(manager.statusMessage)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.blue)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(manager.statusMessage).font(.system(size: 11, weight: .medium)).foregroundColor(.blue).frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding()
-        .background(Color.white)
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.03), radius: 8, x: 0, y: 4)
-        .padding(.horizontal)
-        .padding(.top, 10)
+        .padding().background(Color.white).cornerRadius(16).padding(.horizontal).padding(.top, 10)
     }
 }
 
-// MARK: - 3. واجهة تجميع المكررات (Grouping View)
 struct DuplicatedGroupCard: View {
     let group: VideoGroup
     @EnvironmentObject var manager: VideoPurgerManager
@@ -325,98 +340,86 @@ struct DuplicatedGroupCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                HStack(spacing: 6) {
-                    Image(systemName: "video.badge.plus")
-                        .foregroundColor(.red)
-                    Text("مجموعة متطابقة الأغلفة (\(group.videos.count))")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(.black)
-                }
+                Text(group.title).font(.system(size: 13, weight: .bold)).foregroundColor(.black).lineLimit(1)
                 Spacer()
-                
                 Button(action: { manager.keepOnlyOne(in: group) }) {
-                    Text("إبقاء نسخة واحدة 🧹")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.red)
-                        .cornerRadius(8)
+                    Text("إبقاء نسخة").font(.system(size: 10, weight: .bold)).foregroundColor(.white)
+                        .padding(.horizontal, 10).padding(.vertical, 6).background(Color.red).cornerRadius(8)
                 }
             }
-            
             Divider()
             
             ForEach(group.videos) { video in
                 HStack(spacing: 12) {
-                    // غلاف حقيقي ملتقط من الفيديو
-                    if let image = video.thumbnail {
-                        Image(uiImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 75, height: 75)
-                            .cornerRadius(10)
-                            .clipped()
+                    if let img = video.thumbnail {
+                        Image(uiImage: img).resizable().aspectRatio(contentMode: .fill).frame(width: 60, height: 60).cornerRadius(8).clipped()
                     } else {
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color.gray.opacity(0.1))
-                            .frame(width: 75, height: 75)
-                            .overlay(Image(systemName: "video").foregroundColor(.gray))
+                        RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.1)).frame(width: 60, height: 60)
+                            .overlay(Image(systemName: video.fileURL != nil ? "doc.fill" : "video").foregroundColor(.gray))
                     }
                     
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(video.name)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.black)
-                            .lineLimit(2)
-                        
-                        Text(String(format: "المدة: %.1f ثانية", video.duration))
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
+                        Text(video.name).font(.system(size: 12, weight: .medium)).foregroundColor(.black).lineLimit(1)
+                        Text(video.fileURL != nil ? "المصدر: تطبيق الملفات" : "المصدر: مكتبة الصور").font(.system(size: 10)).foregroundColor(.secondary)
                     }
-                    
                     Spacer()
-                    
-                    Button(action: { manager.deleteIndividualVideo(from: group, video: video) }) {
-                        Image(systemName: "trash")
-                            .foregroundColor(.red)
-                            .padding(8)
-                            .background(Color.red.opacity(0.05))
-                            .clipShape(Circle())
+                    Button(action: { manager.deleteVideo(from: group, video: video) }) {
+                        Image(systemName: "trash").foregroundColor(.red).padding(8).background(Color.red.opacity(0.05)).clipShape(Circle())
                     }
                 }
-                .padding(.vertical, 2)
             }
         }
-        .padding()
-        .background(Color.white)
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.02), radius: 6, x: 0, y: 3)
+        .padding().background(Color.white).cornerRadius(16)
     }
 }
 
-// MARK: - 4. حاوية عرض مؤشر تقدم الفحص
 struct ScanProgressContainer: View {
     @EnvironmentObject var manager: VideoPurgerManager
-    
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Spacer()
-            ProgressView(value: manager.scanProgress)
-                .progressViewStyle(LinearProgressViewStyle(tint: Color.blue))
-                .scaleEffect(x: 1, y: 2, anchor: .center)
-                .padding(.horizontal, 40)
-            
-            Text(manager.statusMessage)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.gray)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 20)
-            
-            Text("\(Int(manager.scanProgress * 100))%")
-                .font(.system(size: 28, weight: .bold))
-                .foregroundColor(.blue)
+            ProgressView(value: manager.scanProgress).progressViewStyle(LinearProgressViewStyle(tint: Color.blue)).padding(.horizontal, 40)
+            Text("\(Int(manager.scanProgress * 100))%").font(.system(size: 22, weight: .bold)).foregroundColor(.blue)
+            Text(manager.statusMessage).font(.system(size: 12)).foregroundColor(.gray).multilineTextAlignment(.center).padding(.horizontal)
             Spacer()
+        }
+    }
+}
+
+struct EmptyStateContainer: View {
+    @EnvironmentObject var manager: VideoPurgerManager
+    var body: some View {
+        VStack {
+            Spacer()
+            Image(systemName: "doc.text.magnifyingglass").font(.system(size: 50)).foregroundColor(.gray.opacity(0.4))
+            Text(manager.statusMessage).font(.system(size: 13)).foregroundColor(.gray).multilineTextAlignment(.center).padding(.horizontal, 40)
+            Spacer()
+        }
+    }
+}
+
+// MARK: - الجسر الرابط لاستدعاء مستعرض نظام الملفات (Document Picker Bridge)
+struct FolderPicker: UIViewControllerRepresentable {
+    let onFolderSelected: (URL) -> Void
+    
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        // إنشاء منتقي يركز على المجلدات المفتوحة (Folders/Directories) للسماح بفحص حزمة كاملة
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
+        picker.delegate = context.coordinator
+        picker.allowsMultipleSelection = false
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    
+    class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let parent: FolderPicker
+        init(_ parent: FolderPicker) { self.parent = parent }
+        
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            if let selectedURL = urls.first { parent.onFolderSelected(selectedURL) }
         }
     }
 }
