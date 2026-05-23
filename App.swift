@@ -2,7 +2,7 @@ import SwiftUI
 import AVFoundation
 import Photos
 import UniformTypeIdentifiers
-import Vision // استدعاء حزمة الرؤية لتوليد بصمات بصرية حقيقية
+import Vision
 
 struct VideoFile: Identifiable, Equatable {
     let id: UUID = UUID()
@@ -11,7 +11,7 @@ struct VideoFile: Identifiable, Equatable {
     let name: String
     let duration: TimeInterval
     var thumbnail: UIImage?
-    let visualHash: [Float] // تحويل البصمة إلى مصفوفة رقمية للمقارنة الحقيقية
+    let visualHash: [Float]
 }
 
 struct VideoGroup: Identifiable {
@@ -26,17 +26,40 @@ class VideoPurgerManager: ObservableObject {
     @Published var scanProgress: Double = 0.0
     @Published var statusMessage: String = "اختر مصدر الفحص لبدء المقارنة البصرية الحقيقية"
     @Published var hasPhotoPermission: Bool = false
+    @Published var showSettingsButton: Bool = false // إظهار زر الإعدادات عند الرفض
     
     init() { checkPhotoLibraryPermission() }
     
     func checkPhotoLibraryPermission() {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        DispatchQueue.main.async { self.hasPhotoPermission = (status == .authorized || status == .limited) }
+        DispatchQueue.main.async {
+            self.hasPhotoPermission = (status == .authorized || status == .limited)
+            self.showSettingsButton = (status == .denied || status == .restricted)
+        }
     }
     
-    // فحص الاستوديو المدعم بحماية الذاكرة والهاش البصري الحقيقي
     func scanDeviceGallery() {
-        guard hasPhotoPermission else { return }
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        
+        if status == .notDetermined {
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { newStatus in
+                DispatchQueue.main.async {
+                    self.hasPhotoPermission = (newStatus == .authorized || newStatus == .limited)
+                    self.showSettingsButton = (newStatus == .denied || newStatus == .restricted)
+                    if self.hasPhotoPermission { self.startGalleryScanProcedure() }
+                }
+            }
+        } else if status == .authorized || status == .limited {
+            self.startGalleryScanProcedure()
+        } else {
+            DispatchQueue.main.async {
+                self.showSettingsButton = true
+                self.statusMessage = "صلاحية الاستوديو مرفوضة، يرجى تفعيلها من إعدادات الآيفون للبدء."
+            }
+        }
+    }
+    
+    private func startGalleryScanProcedure() {
         self.updateStatus(scanning: true, progress: 0.0, msg: "جاري استعلام ملفات الاستوديو...")
         
         DispatchQueue.global(qos: .userInitiated).async {
@@ -45,7 +68,7 @@ class VideoPurgerManager: ObservableObject {
             let total = fetchResult.count
             
             guard total > 0 else {
-                self.updateStatus(scanning: false, progress: 0.0, msg: "لم يتم العثور على فيديوهات")
+                self.updateStatus(scanning: false, progress: 0.0, msg: "لم يتم العثور على فيديوهات في الاستوديو")
                 return
             }
             
@@ -55,7 +78,6 @@ class VideoPurgerManager: ObservableObject {
             requestOptions.isSynchronous = true
             
             for index in 0..<total {
-                // استخدام autoreleasepool لمنع كراش الذاكرة العشوائية Out of Memory
                 autoreleasepool {
                     let asset = fetchResult.object(at: index)
                     let resources = PHAssetResource.assetResources(for: asset)
@@ -66,21 +88,23 @@ class VideoPurgerManager: ObservableObject {
                         thumb = img
                     }
                     
-                    // توليد بصمة بصرية حقيقية من المحتوى الفعلي للصورة المصغرة
                     if let validThumb = thumb, let featurePrint = self.extractFeaturePrint(from: validThumb) {
                         discovered.append(VideoFile(asset: asset, name: fileName, duration: asset.duration, thumbnail: validThumb, visualHash: featurePrint))
                     }
                     
-                    self.updateProgress(current: index + 1, total: total, name: fileName)
+                    // تحديث الواجهة بذكاء (كل 5 ملفات) لمنع اختناق الـ UI Thread
+                    if index % 5 == 0 || index == total - 1 {
+                        self.updateProgress(current: index + 1, total: total, name: fileName)
+                    }
                 }
             }
             self.processVisualDuplicates(videos: discovered)
         }
     }
     
-    // فحص الملفات الآمن
+    // إصلاح دالة المجلدات لتصبح فحصاً عميقاً (Deep Recursive Scan) شامل المجلدات الفرعية
     func scanSelectedFolder(url: URL) {
-        self.updateStatus(scanning: true, progress: 0.0, msg: "جاري فتح المجلد المختار...")
+        self.updateStatus(scanning: true, progress: 0.0, msg: "جاري فحص المجلد والمجلدات الفرعية...")
         
         DispatchQueue.global(qos: .userInitiated).async {
             guard url.startAccessingSecurityScopedResource() else {
@@ -90,21 +114,23 @@ class VideoPurgerManager: ObservableObject {
             defer { url.stopAccessingSecurityScopedResource() }
             
             let fileManager = FileManager.default
-            guard let files = try? fileManager.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) else {
+            // استخدام الـ Enumerator للزحف العميق داخل المجلدات
+            guard let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else {
                 self.updateStatus(scanning: false, progress: 0.0, msg: "المجلد غير قابل للقراءة")
                 return
             }
             
-            let videoURLs = files.filter { file in
-                if let type = UTType(filenameExtension: file.pathExtension) {
-                    return type.conforms(to: .video) || type.conforms(to: .movie)
+            var videoURLs: [URL] = []
+            while let fileURL = enumerator.nextObject() as? URL {
+                if let type = UTType(filenameExtension: fileURL.pathExtension),
+                   type.conforms(to: .video) || type.conforms(to: .movie) {
+                    videoURLs.append(fileURL)
                 }
-                return false
             }
             
             let total = videoURLs.count
             guard total > 0 else {
-                self.updateStatus(scanning: false, progress: 0.0, msg: "لا توجد ملفات فيديو مدعومة هنا")
+                self.updateStatus(scanning: false, progress: 0.0, msg: "لا توجد ملفات فيديو مدعومة داخل هذا المار")
                 return
             }
             
@@ -126,14 +152,16 @@ class VideoPurgerManager: ObservableObject {
                             discovered.append(VideoFile(fileURL: fileURL, name: fileName, duration: duration.isNaN ? 0.0 : duration, thumbnail: thumb, visualHash: featurePrint))
                         }
                     }
-                    self.updateProgress(current: index + 1, total: total, name: fileName)
+                    
+                    if index % 5 == 0 || index == total - 1 {
+                        self.updateProgress(current: index + 1, total: total, name: fileName)
+                    }
                 }
             }
             self.processVisualDuplicates(videos: discovered)
         }
     }
     
-    // محرك خوارزمية ذكاء الآلة لمقارنة تقارب البصمات (Vision Feature Distance)
     private func processVisualDuplicates(videos: [VideoFile]) {
         var unhandled = videos
         var finalGroups: [VideoGroup] = []
@@ -144,7 +172,6 @@ class VideoPurgerManager: ObservableObject {
             
             var index = 0
             while index < unhandled.count {
-                // حساب المسافة البصرية بين البصمتين، إذا كانت قريبة جداً (أقل من 0.15) فهما متطابقان بصرياً
                 if let distance = computeDistance(from: current.visualHash, to: unhandled[index].visualHash), distance < 0.15 {
                     matches.append(unhandled.remove(at: index))
                 } else {
@@ -164,7 +191,6 @@ class VideoPurgerManager: ObservableObject {
         }
     }
     
-    // استخراج البصمة الذكية باستخدام معالج الرؤية من آبل
     private func extractFeaturePrint(from image: UIImage) -> [Float]? {
         guard let cgImage = image.cgImage else { return nil }
         let requestHandler = VNImageRequestHandler(cgImage: cgImage, options: [:])
@@ -180,7 +206,6 @@ class VideoPurgerManager: ObservableObject {
     
     private func computeDistance(from hash1: [Float], to hash2: [Float]) -> Float? {
         guard hash1.count == hash2.count else { return nil }
-        // حساب المسافة الرياضية (Euclidean Distance) لتحديد مدى التطابق البصري
         return sqrt(zip(hash1, hash2).map { pow($0 - $1, 2) }.reduce(0, +))
     }
     
@@ -199,7 +224,12 @@ class VideoPurgerManager: ObservableObject {
         }
     }
     
-    // وظائف مسح حقيقية مع ربط فوري بالـ UI للـ Main Thread
+    func openSystemSettings() {
+        if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(settingsURL)
+        }
+    }
+    
     func deleteVideo(from group: VideoGroup, video: VideoFile) {
         if let asset = video.asset {
             PHPhotoLibrary.shared().performChanges({
@@ -230,7 +260,7 @@ class VideoPurgerManager: ObservableObject {
     }
 }
 
-// MARK: - واجهات العرض المعدلة مع زر التأمين والأمان المضاف
+// MARK: - الواجهات الرسومية
 @main
 struct StudioPurgerApp: App {
     @StateObject private var manager = VideoPurgerManager()
@@ -263,7 +293,7 @@ struct MainDashboardView: View {
                         }
                     }
                 }
-                .navigationTitle("الفاحص البصري الذكي")
+                .navigationTitle("منزّه الاستوديو والملفات")
                 .sheet(isPresented: $showFolderPicker) {
                     FolderPicker { url in manager.scanSelectedFolder(url: url) }
                 }
@@ -280,8 +310,8 @@ struct HeaderStatusCard: View {
         VStack(spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("فحص الحماية المتقدم").font(.system(size: 16, weight: .bold))
-                    Text("مقارنة بصرية حقيقية عبر حزمة Vision").font(.system(size: 11)).foregroundColor(.gray)
+                    Text("الفحص الهجين المحصّن").font(.system(size: 16, weight: .bold))
+                    Text("دعم المجلدات الفرعية وحماية الواجهة").font(.system(size: 11)).foregroundColor(.gray)
                 }
                 Spacer()
                 HStack(spacing: 8) {
@@ -294,7 +324,18 @@ struct HeaderStatusCard: View {
                 }.disabled(manager.isScanning)
             }
             Divider()
-            Text(manager.statusMessage).font(.system(size: 11, weight: .medium)).foregroundColor(.blue)
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text(manager.statusMessage).font(.system(size: 11, weight: .medium)).foregroundColor(.blue)
+                
+                if manager.showSettingsButton {
+                    Button(action: { manager.openSystemSettings() }) {
+                        Text("افتح إعدادات الآيفون لمنح الصلاحية ⚙️")
+                            .font(.system(size: 11, weight: .bold)).foregroundColor(.white)
+                            .padding(.vertical, 6).padding(.horizontal, 12).background(Color.red).cornerRadius(8)
+                    }
+                }
+            }
         }.padding().background(Color.white).cornerRadius(16).padding(.horizontal)
     }
 }
@@ -312,11 +353,10 @@ struct DuplicatedGroupCard: View {
                 Button(action: { confirmBulkDelete = true }) {
                     Text("تفريغ المكرر").font(.system(size: 10, weight: .bold)).foregroundColor(.white).padding(6).background(Color.red).cornerRadius(8)
                 }
-                // جدار أمان لمنع الحذف بالخطأ بدون علم المستخدم
                 .alert(isPresented: $confirmBulkDelete) {
                     Alert(
                         title: Text("تأكيد مسح الوسائط"),
-                        message: Text("هل أنت متأكد من رغبتك في حذف جميع النسخ المكررة وإبقاء نسخة واحدة فقط؟ لا يمكن التراجع عن هذا الإجراء."),
+                        message: Text("هل أنت متأكد من رغبتك في حذف جميع النسخ المكررة وإبقاء نسخة واحدة فقط؟"),
                         primaryButton: .destructive(Text("حذف دائم")) { manager.keepOnlyOne(in: group) },
                         secondaryButton: .cancel(Text("تراجع"))
                     )
@@ -369,11 +409,14 @@ struct EmptyStateContainer: View {
 
 struct FolderPicker: UIViewControllerRepresentable {
     let onFolderSelected: (URL) -> Void
+    
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.directory], asCopy: false)
         picker.delegate = context.coordinator
+        picker.allowsMultipleSelection = false
         return picker
     }
+    
     func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     
